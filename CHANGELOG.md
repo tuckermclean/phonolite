@@ -19,7 +19,8 @@ First version: a classic-skinned mpg123 frontend on protolith.
   `viscolor.txt`, `pledit.txt`, `region.txt` (polygons rasterized by pixel
   centers into the window's SHAPE). Geometry measured on real sheets.
 - **Built-in skin**: every sheet generated in code (volcanic stone, mint
-  LCD, amber lamps), including a 3x5 font for the whole text sheet.
+  LCD, amber lamps), including a 3x5 font for the whole text sheet and
+  a 5x7 one, spaced and shadowed, for the window titles.
 - **Windows**: player, equalizer and playlist docked in one shaped,
   borderless window, dragged as one; double size; always on top;
   minimize; popup menus (override-redirect); dialogs (file browser, skin

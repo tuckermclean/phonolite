@@ -117,13 +117,75 @@ fn text_centered(c: &mut Canvas, s: &str, cx: i32, y: i32, color: u32) {
     text(c, s, cx - w / 2, y, color);
 }
 
-/// Bold title text: each glyph twice, a pixel apart (5 px per character).
-fn bold(c: &mut Canvas, s: &str, cx: i32, y: i32, color: u32) {
-    let w = 5 * s.chars().count() as i32 - 1;
-    for (i, ch) in s.chars().enumerate() {
-        let x = cx - w / 2 + 5 * i as i32;
-        glyph(c, ch, x, y, color);
-        glyph(c, ch, x + 1, y, color);
+/// A 5x7 alphabet for window titles, one row per byte (bit 4 = left).
+/// The 3x5 font is too small to read in a title bar, and doubling it
+/// fills the letters in.
+const TITLE_GLYPHS: [[u8; 7]; 26] = [
+    [0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11], // A
+    [0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e], // B
+    [0x0e, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0e], // C
+    [0x1e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1e], // D
+    [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f], // E
+    [0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x10], // F
+    [0x0e, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0f], // G
+    [0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11], // H
+    [0x0e, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e], // I
+    [0x07, 0x02, 0x02, 0x02, 0x02, 0x12, 0x0c], // J
+    [0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11], // K
+    [0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f], // L
+    [0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11], // M
+    [0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11], // N
+    [0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e], // O
+    [0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10, 0x10], // P
+    [0x0e, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0d], // Q
+    [0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11], // R
+    [0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e], // S
+    [0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04], // T
+    [0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e], // U
+    [0x11, 0x11, 0x11, 0x11, 0x11, 0x0a, 0x04], // V
+    [0x11, 0x11, 0x11, 0x15, 0x15, 0x15, 0x0a], // W
+    [0x11, 0x11, 0x0a, 0x04, 0x0a, 0x11, 0x11], // X
+    [0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04], // Y
+    [0x1f, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1f], // Z
+];
+
+/// Letter spacing in titles.
+const TITLE_GAP: i32 = 2;
+
+/// A title glyph's rows and its used columns (I is narrower than M).
+fn title_glyph(ch: char) -> Option<([u8; 7], i32, i32)> {
+    let rows = TITLE_GLYPHS[(ch.to_ascii_uppercase() as usize).checked_sub('A' as usize).filter(|&i| i < 26)?];
+    let used = rows.iter().fold(0, |a, r| a | r);
+    let first = (0..5).find(|c| used >> (4 - c) & 1 == 1)?;
+    let last = (0..5).rev().find(|c| used >> (4 - c) & 1 == 1)?;
+    Some((rows, first, last - first + 1))
+}
+
+/// Width of a title in pixels.
+fn title_width(s: &str) -> i32 {
+    let widths: Vec<i32> = s.chars().map(|ch| title_glyph(ch).map_or(3, |(_, _, w)| w)).collect();
+    widths.iter().sum::<i32>() + TITLE_GAP * (widths.len() as i32 - 1).max(0)
+}
+
+/// A window title, 7 px tall, centered on `cx`, with a dark shadow down
+/// and to the right so it stands off the stone.
+fn title(c: &mut Canvas, s: &str, cx: i32, y: i32, color: u32) {
+    for (dx, dy, col) in [(1, 1, EDGE_DARK), (0, 0, color)] {
+        let mut x = cx - title_width(s) / 2;
+        for ch in s.chars() {
+            let Some((rows, first, w)) = title_glyph(ch) else {
+                x += 3 + TITLE_GAP;
+                continue;
+            };
+            for (r, bits) in rows.iter().enumerate() {
+                for col_i in 0..w {
+                    if bits >> (4 - first - col_i) & 1 == 1 {
+                        c.put(x + col_i + dx, y + r as i32 + dy, col);
+                    }
+                }
+            }
+            x += w + TITLE_GAP;
+        }
     }
 }
 
@@ -290,7 +352,7 @@ fn titlebar() -> Canvas {
                 c.fill_rect(r(x0, area.y + k + 1, (x1 - x0) as u32, 1), EDGE_DARK);
             }
         }
-        bold(&mut c, "PHONOLITE", area.x + 138, area.y + 5, if lit { 0xe8fff4 } else { LABEL });
+        title(&mut c, "PHONOLITE", area.x + 138, area.y + 3, if lit { 0xe8fff4 } else { LABEL });
     }
     // Title buttons: menu, minimize, close, shade — up and down.
     type Icon = fn(&mut Canvas, i32, i32);
@@ -531,7 +593,7 @@ fn pledit() -> Canvas {
             let groove = if lit { mix(INK, STONE, 120) } else { STONE_HI };
             match k {
                 0 => c.fill_rect(r(p.x, p.y, 1, 20), EDGE_LIGHT),
-                1 => bold(&mut c, "PLAYLIST", p.x + 50, p.y + 8, if lit { 0xe8fff4 } else { LABEL }),
+                1 => title(&mut c, "PLAYLIST", p.x + 50, p.y + 5, if lit { 0xe8fff4 } else { LABEL }),
                 _ => {}
             }
             if k != 1 {
@@ -715,7 +777,7 @@ fn eqmain() -> Canvas {
                 c.fill_rect(r(x0, area.y + k + 1, (x1 - x0) as u32, 1), EDGE_DARK);
             }
         }
-        bold(&mut c, "EQUALIZER", 137, area.y + 5, if lit { 0xe8fff4 } else { LABEL });
+        title(&mut c, "EQUALIZER", 137, area.y + 3, if lit { 0xe8fff4 } else { LABEL });
         raised(&mut c, r(264, area.y + 3, 9, 9), STEEL);
         for d in 0..5 {
             c.put(266 + d, area.y + 5 + d, INK);
@@ -815,6 +877,26 @@ mod tests {
         for ch in layout::TEXT_LAYOUT.chars().filter(|c| !matches!(c, '\n' | '\0' | ' ')) {
             assert!(GLYPHS.iter().any(|(g, _)| *g == ch), "{ch:?}");
         }
+    }
+
+    /// The titles read as separate letters: scanning across the title, the
+    /// columns holding text form one run per letter, with clear gaps.
+    #[test]
+    fn titles_are_separate_letters() {
+        let s = skin();
+        let ink = 0xe8fff4;
+        let runs = |sheet: &Canvas, area: Rect| {
+            let lit: Vec<bool> = (0..area.width).map(|x| (0..area.height).any(|y| sheet.get(area.x as u32 + x, area.y as u32 + y) == Some(ink))).collect();
+            lit.windows(2).filter(|w| w[1] && !w[0]).count() + usize::from(lit[0])
+        };
+        assert_eq!(runs(&s.titlebar, main::TITLE_ACTIVE), "PHONOLITE".len());
+        assert_eq!(runs(&s.eqmain, eq::TITLE_ACTIVE), "EQUALIZER".len());
+        assert_eq!(runs(&s.pledit, pl::TOP_ACTIVE[1]), "PLAYLIST".len());
+        // 7 rows tall.
+        let rows = (0..14).filter(|&y| (0..275).any(|x| s.titlebar.get(27 + x, y) == Some(ink))).count();
+        assert_eq!(rows, 7);
+        assert_eq!(title_width("I"), 3);
+        assert_eq!(title_width("MI"), 5 + TITLE_GAP + 3);
     }
 
     #[test]
