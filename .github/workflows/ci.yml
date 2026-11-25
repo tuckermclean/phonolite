@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable, "1.75"]
+    env:
+      PHONOLITE_REQUIRE_MPG123: 1
+      PHONOLITE_REQUIRE_XVFB: 1
+    steps:
+      # protolith is a path dependency (../protolith): check both out side by side.
+      - uses: actions/checkout@v4
+        with:
+          path: phonolite
+      - uses: actions/checkout@v4
+        with:
+          repository: tuckermclean/protolith
+          path: protolith
+      - run: sudo apt-get update && sudo apt-get install -y mpg123 xvfb x11-utils
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+      - working-directory: phonolite
+        run: |
+          cargo fmt --check
+          RUSTFLAGS="-D warnings" cargo clippy --all-targets
+          RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+          cargo test
+          for i in $(seq 1 10); do cargo test -q -- --test-threads=16 || exit 1; done

@@ -1,0 +1,36 @@
+# Changelog
+
+## 0.1.0 — unreleased
+
+First version: a classic-skinned mpg123 frontend on protolith.
+
+- **Audio**: one mpg123 per track in remote mode (`-R --remote-err`),
+  decoding to a pipe; a pump passes the samples to `out123` (or any sink
+  command), applying volume and balance, pacing writes 0.3 s ahead of the
+  clock, replaying the unheard tail after a pause, flushing on seek or
+  skip, and queuing tracks back to back with no gap. The equalizer is
+  mpg123's (10 bands mapped onto its 32 subbands, plus preamp). Decode
+  rate selectable (`--rate`). Tags from mpg123 (ID3v1 fixed-width in bytes,
+  ID3v2, ICY). A failed file moves the playlist on; five in a row stop.
+- **Skins**: `.wsz` (ZIP: stored and deflated members, CRC-checked;
+  inflate written here, tested against Python's zlib) or folders, file
+  names in any case, one folder deep; per-file fallback to the built-in
+  skin (`balance.bmp` to the skin's own `volume.bmp`); `nums_ex.bmp`;
+  `viscolor.txt`, `pledit.txt`, `region.txt` (polygons rasterized by pixel
+  centers into the window's SHAPE). Geometry measured on real sheets.
+- **Built-in skin**: every sheet generated in code (volcanic stone, mint
+  LCD, amber lamps), including a 3x5 font for the whole text sheet.
+- **Windows**: player, equalizer and playlist docked in one shaped,
+  borderless window, dragged as one; double size; always on top;
+  minimize; popup menus (override-redirect); dialogs (file browser, skin
+  picker, playlist load/save, URL, jump to file) from protolith widgets.
+- **Visualizer**: 19-bar spectrum (512-point FFT, falling bars, held
+  peaks) or oscilloscope, in `viscolor.txt` colors.
+- **Playlist**: M3U/M3U8/PLS read and write, folder scanning, shuffle (a
+  fresh order per lap, never the same track twice in a row), repeat,
+  sort/reverse/randomize/crop, stable entry ids across edits.
+- **Frugal drawing**: panes redraw only when what they show changed (most
+  frames only the visualizer and title), and only changed pixels go to
+  the server. Measured: 1.65 % of a core at 30 fps, 0.95 % at
+  `--rate 22050 --fps 10`.
+- Settings and playlist kept in `$XDG_CONFIG_HOME/phonolite`.

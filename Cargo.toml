@@ -1,0 +1,25 @@
+[package]
+name = "phonolite"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "A skinnable MP3 player for X11: a frontend to mpg123 that wears classic 2.x skins, drawn with protolith."
+repository = "https://github.com/tuckermclean/phonolite"
+# phonolite is MIT OR Apache-2.0; the Terminus glyphs it draws text with
+# (embedded by protolith's font-terminus-12 feature) are OFL-1.1.
+license = "(MIT OR Apache-2.0) AND OFL-1.1"
+keywords = ["mp3", "player", "mpg123", "skin", "x11"]
+categories = ["multimedia::audio", "gui"]
+
+# One dependency, by design: protolith for pixels, windows, input and
+# widgets. Audio is mpg123's job (a separate program); everything else
+# (inflate, ZIP, FFT) is here in std-only Rust.
+[dependencies]
+protolith = { path = "../protolith", default-features = false, features = ["x11", "bmp", "ui", "font-terminus-12"] }
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
