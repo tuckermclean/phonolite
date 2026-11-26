@@ -38,6 +38,7 @@ pub mod num;
 pub mod oss;
 pub mod player;
 pub mod playlist;
+pub mod pulse;
 pub mod remote;
 pub mod skin;
 pub mod vis;

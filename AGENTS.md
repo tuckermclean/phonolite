@@ -85,6 +85,11 @@ real time, and races show only under load. Needs `mpg123` (which brings
 - Without a window manager a newly mapped window takes the focus: a popup
   must not close on the main window's focus-out alone.
 - Terminus (the 191-glyph subset) has no `…` or `•`.
+- PulseAudio: protocol details come from its `native-common.h`,
+  `tagstruct.c` and `protocol-native.c`; the fake server in `pulse.rs` only
+  encodes our reading of them, so `tools/check-pulse.sh` (real PulseAudio
+  and PipeWire in containers) is the proof — run it after touching
+  `pulse.rs`.
 - Size, on the i486 build: `{}`/`{:.N}` on an `f64`, or `str::parse::<f64>`,
   pulls in ~24 KB of std's float conversion — use `num::fixed` and
   `num::parse_decimal`. `f64::ln`/`powf`/`sin`/`cos`/`log10` pull ~17 KB of

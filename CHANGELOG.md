@@ -35,6 +35,16 @@ First version: a classic-skinned mpg123 frontend on protolith.
   the server. Measured: 1.65 % of a core at 30 fps, 0.95 % at
   `--rate 22050 --fps 10`.
 - Settings and playlist kept in `$XDG_CONFIG_HOME/phonolite`.
+- **Its own PulseAudio client** (`src/pulse.rs`): the native protocol in
+  safe Rust over the socket (`$PULSE_SERVER`, else
+  `$XDG_RUNTIME_DIR/pulse/native`) — protocol 13, no shared memory, audio
+  sent only as the server requests it, cut off by hanging up, drained at
+  the end. First choice whenever such a server runs, so PulseAudio,
+  PipeWire's Pulse layer and WSLg play with nothing installed. Checked by
+  `tools/check-pulse.sh`: a tone played into real PulseAudio and PipeWire
+  1.4 (no cookie) arrives at 440 Hz at the level sent; unit tests check the
+  encodings byte for byte and flow control against a server that enforces
+  its credit. +16 KB on the i486 build.
 - **The decoder is its own crate**, `phonolite-mpeg` (`mpeg/`), built at
   opt-level 3 while the rest stays at "z": 406x real time on 320 kbit/s
   stereo, from 283x, for 12 KB on the i486 build. `cargo run --release -p

@@ -188,10 +188,12 @@ impl SinkCommand {
 }
 
 /// What [`Output::choose`] found on this machine.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Found {
     /// A PulseAudio or PipeWire socket in `$XDG_RUNTIME_DIR`.
     pub sound_server: bool,
+    /// A PulseAudio-protocol socket phonolite can talk to itself.
+    pub pulse: Option<std::path::PathBuf>,
     /// `out123` on `PATH` (it comes with mpg123).
     pub out123: bool,
     /// `pacat` on `PATH`.
@@ -213,6 +215,9 @@ pub enum Output {
     Command(SinkCommand),
     /// Straight to an OSS device (`/dev/dsp`), at this rate.
     Oss(std::path::PathBuf),
+    /// Straight to a PulseAudio-speaking server (PulseAudio, PipeWire's
+    /// Pulse layer, WSLg) at this socket.
+    Pulse(std::path::PathBuf),
 }
 
 impl Output {
@@ -221,6 +226,7 @@ impl Output {
         match self {
             Output::Command(c) => c.program.clone(),
             Output::Oss(p) => p.display().to_string(),
+            Output::Pulse(_) => "PulseAudio".into(),
         }
     }
 
@@ -229,9 +235,11 @@ impl Output {
     pub fn choose(rate: u32) -> Vec<Output> {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from);
         let path = std::env::var_os("PATH").unwrap_or_default();
+        let pulse_server = std::env::var("PULSE_SERVER").ok().filter(|s| !s.is_empty());
+        let pulse = crate::pulse::server_path(pulse_server.as_deref(), runtime.as_deref()).filter(|p| p.exists());
         let found = Found {
-            sound_server: std::env::var_os("PULSE_SERVER").is_some_and(|s| !s.is_empty())
-                || runtime.is_some_and(|d| d.join("pulse/native").exists() || d.join("pipewire-0").exists()),
+            sound_server: pulse_server.is_some() || pulse.is_some() || runtime.is_some_and(|d| d.join("pipewire-0").exists()),
+            pulse,
             out123: on_path("out123", &path),
             pacat: on_path("pacat", &path),
             aplay: on_path("aplay", &path),
@@ -245,6 +253,9 @@ impl Output {
     /// moves on to the next.
     pub fn candidates(f: &Found, rate: u32) -> Vec<Output> {
         let mut out = Vec::new();
+        if let Some(p) = &f.pulse {
+            out.push(Output::Pulse(p.clone()));
+        }
         if f.out123 {
             out.push(Output::Command(SinkCommand::out123(&[], rate)));
         }
@@ -262,22 +273,9 @@ impl Output {
         out
     }
 
-    /// The first that is there: out123; pacat, if a sound server runs;
-    /// aplay. All of them mix with other programs (through the server, or
-    /// alsa-lib's dmix where configured), so they come before `/dev/dsp`,
-    /// which is exclusive: the last resort, and the bare machine's way.
-    /// With nothing at all, `/dev/dsp` is still the choice — if it is
-    /// missing too, opening it fails with a message saying what to install.
+    /// The first [candidate](Output::candidates).
     pub fn pick(f: &Found, rate: u32) -> Output {
-        if f.out123 {
-            Output::Command(SinkCommand::out123(&[], rate))
-        } else if f.sound_server && f.pacat {
-            Output::Command(SinkCommand::pacat(rate))
-        } else if f.aplay {
-            Output::Command(SinkCommand::aplay(rate))
-        } else {
-            Output::Oss("/dev/dsp".into())
-        }
+        Output::candidates(f, rate).swap_remove(0)
     }
 }
 
@@ -312,6 +310,7 @@ fn nothing_to_play_through(e: io::Error) -> io::Error {
 enum SinkHandle {
     Process(SinkProcess),
     Oss(crate::oss::Control),
+    Pulse(crate::pulse::Control),
 }
 
 impl SinkHandle {
@@ -320,6 +319,10 @@ impl SinkHandle {
             Output::Command(cmd) => {
                 let (p, stdin) = SinkProcess::spawn(cmd)?;
                 Ok((SinkHandle::Process(p), Box::new(stdin)))
+            }
+            Output::Pulse(path) => {
+                let (c, w) = crate::pulse::open(path, rate)?;
+                Ok((SinkHandle::Pulse(c), Box::new(w)))
             }
             Output::Oss(path) => {
                 let (c, f) = crate::oss::open(path, rate).map_err(nothing_to_play_through)?;
@@ -333,13 +336,14 @@ impl SinkHandle {
         match self {
             SinkHandle::Process(p) => p.finish(),
             SinkHandle::Oss(c) => c.finish(),
+            SinkHandle::Pulse(c) => c.finish(),
         }
     }
 
     fn complaint(&self) -> String {
         match self {
             SinkHandle::Process(p) => p.last_words(),
-            SinkHandle::Oss(_) => String::new(),
+            SinkHandle::Oss(_) | SinkHandle::Pulse(_) => String::new(),
         }
     }
 }
@@ -1020,7 +1024,7 @@ pub(crate) mod tests {
         let pacat = Output::Command(SinkCommand::pacat(44100));
         let aplay = Output::Command(SinkCommand::aplay(44100));
         let dsp = Output::Oss("/dev/dsp".into());
-        let f = |sound_server, out123, pacat, aplay| Found { sound_server, out123, pacat, aplay };
+        let f = |sound_server, out123, pacat, aplay| Found { sound_server, pulse: None, out123, pacat, aplay };
         assert_eq!(Output::pick(&f(true, true, true, true), 44100), out123, "out123 first");
         assert_eq!(Output::pick(&f(false, true, false, false), 44100), out123, "through alsa-lib: mixed, unlike /dev/dsp");
         assert_eq!(Output::pick(&f(true, false, true, true), 44100), pacat, "no mpg123, a server: pacat");
@@ -1032,8 +1036,10 @@ pub(crate) mod tests {
 
     #[test]
     fn candidates_in_order_always_ending_with_the_device() {
-        let f = |sound_server, out123, pacat, aplay| Found { sound_server, out123, pacat, aplay };
+        let f = |sound_server, out123, pacat, aplay| Found { sound_server, pulse: None, out123, pacat, aplay };
         let names = |c: Vec<Output>| c.iter().map(Output::name).collect::<Vec<_>>();
+        let with_pulse = Found { pulse: Some("/run/user/1/pulse/native".into()), ..f(true, true, true, true) };
+        assert_eq!(names(Output::candidates(&with_pulse, 44100)), ["PulseAudio", "out123", "pacat", "aplay", "/dev/dsp"], "its own client first");
         assert_eq!(names(Output::candidates(&f(true, true, true, true), 44100)), ["out123", "pacat", "aplay", "/dev/dsp"]);
         assert_eq!(names(Output::candidates(&f(false, false, true, true), 44100)), ["aplay", "pacat", "/dev/dsp"], "no server found: pacat after aplay");
         assert_eq!(names(Output::candidates(&f(false, false, false, false), 44100)), ["/dev/dsp"]);

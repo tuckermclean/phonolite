@@ -15,8 +15,9 @@ phonolite --rate 22050 --fps 10 ...    # a slow machine: half the work
 ```
 
 Nothing else is required: without mpg123 it decodes with its built-in
-decoder, and it plays through whichever of `out123`, `pacat` or `aplay` is
-installed, or straight to `/dev/dsp` (OSS; on ALSA systems the kernel's OSS
+decoder, and it plays straight to a PulseAudio or PipeWire server, or
+through whichever of `out123`, `pacat` or `aplay` is installed, or straight
+to `/dev/dsp` (OSS; on ALSA systems the kernel's OSS
 emulation, `CONFIG_SND_PCM_OSS`). With none of those, it says what to
 install.
 
@@ -64,8 +65,12 @@ ID3v1/v2 tags and the LAME/Xing header (length, seek table), resamples
 linearly to the session rate, and applies the equalizer in its subbands
 just as mpg123 does. It plays files; streams (`http://…`) need mpg123.
 
-**Output.** The first of these that is installed: `out123` (with mpg123);
-`pacat` when a PulseAudio or PipeWire server runs; `aplay` (alsa-utils).
+**Output.** When a PulseAudio-speaking server runs — PulseAudio, PipeWire
+(through its Pulse layer, as on most current desktops) or WSLg — phonolite
+talks to it itself (`src/pulse.rs`: the native protocol in safe Rust over
+the socket, as protolith speaks X11), with nothing else installed.
+Otherwise the first of these that is installed: `out123` (with mpg123);
+`pacat` when a server runs; `aplay` (alsa-utils).
 All of them mix with other programs — through the server, or alsa-lib's
 dmix where it is configured — so they come before `/dev/dsp`, which is
 exclusive (dmix lives in alsa-lib, and OSS bypasses it): the last resort,
@@ -87,10 +92,10 @@ Tracks that run into each other are queued back to back with no gap.
 
 It is meant for a Pentium, with a 486DX2 as the stretch goal. Built for
 that (`tools/build-i486.sh`: 32-bit static musl for an i486, std rebuilt
-from source, panics aborting), phonolite is **468 KB**, of which the
-built-in decoder and direct output are 45 KB; a program that does nothing,
-built the same way, is 58 KB (KB here: 1000 bytes). CI holds it under a
-480 KB budget. A size pass found, and removed, 147 KB: unwind tables and
+from source, panics aborting), phonolite is **501 KB**, of which the
+built-in decoder (built for speed) and direct OSS and PulseAudio output are
+about 78 KB; a program that does nothing, built the same way, is 58 KB (KB
+here: 1000 bytes). CI holds it under a 520 KB budget. A size pass found, and removed, 147 KB: unwind tables and
 the unwinder (nothing unwinds), std's float formatting and parsing, libm,
 and libc's DNS resolver (via protolith).
 
