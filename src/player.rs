@@ -168,6 +168,42 @@ impl SinkCommand {
         args.push(rate.to_string());
         SinkCommand { program: "out123".into(), args }
     }
+
+    /// `pacat` (PulseAudio's tools; also PipeWire's Pulse layer), raw
+    /// stereo s16 at `rate`, asking for a short buffer.
+    pub fn pacat(rate: u32) -> SinkCommand {
+        let mut args: Vec<String> = ["--playback", "--raw", "--format=s16le", "--channels=2", "--latency-msec=100"].map(String::from).to_vec();
+        args.push(format!("--rate={rate}"));
+        SinkCommand { program: "pacat".into(), args }
+    }
+
+    /// `aplay` (alsa-utils): through alsa-lib, so through dmix where the
+    /// configuration mixes; raw stereo s16 at `rate`, a 0.2 s buffer.
+    pub fn aplay(rate: u32) -> SinkCommand {
+        let mut args: Vec<String> = ["-q", "-t", "raw", "-f", "S16_LE", "-c", "2", "--buffer-time=200000", "-r"].map(String::from).to_vec();
+        args.push(rate.to_string());
+        args.push("-".into());
+        SinkCommand { program: "aplay".into(), args }
+    }
+}
+
+/// What [`Output::choose`] found on this machine.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Found {
+    /// A PulseAudio or PipeWire socket in `$XDG_RUNTIME_DIR`.
+    pub sound_server: bool,
+    /// `out123` on `PATH` (it comes with mpg123).
+    pub out123: bool,
+    /// `pacat` on `PATH`.
+    pub pacat: bool,
+    /// `aplay` on `PATH`.
+    pub aplay: bool,
+}
+
+/// Whether `program` is an executable file in one of `path`'s directories.
+pub fn on_path(program: &str, path: &std::ffi::OsStr) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::env::split_paths(path).any(|d| std::fs::metadata(d.join(program)).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0))
 }
 
 /// Where the sound goes.
@@ -180,23 +216,32 @@ pub enum Output {
 }
 
 impl Output {
-    /// The usual choice: through out123 when a sound server is running
-    /// (the device belongs to it, and it mixes); else straight to
-    /// `/dev/dsp` if there is one (a bare machine: the 486); else out123
-    /// (alsa-lib, perhaps with dmix).
+    /// Look at what this machine has and [`pick`](Output::pick).
     pub fn choose(rate: u32) -> Output {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from);
-        let server = runtime.is_some_and(|d| d.join("pulse/native").exists() || d.join("pipewire-0").exists());
-        let out123 =
-            Process::new("out123").arg("--version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
-        let dsp = std::path::Path::new("/dev/dsp");
-        Output::pick(server, out123, crate::oss::exists(dsp), rate)
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let found = Found {
+            sound_server: runtime.is_some_and(|d| d.join("pulse/native").exists() || d.join("pipewire-0").exists()),
+            out123: on_path("out123", &path),
+            pacat: on_path("pacat", &path),
+            aplay: on_path("aplay", &path),
+        };
+        Output::pick(&found, rate)
     }
 
-    /// [`Output::choose`]'s rule, given what it found.
-    pub fn pick(sound_server: bool, out123: bool, dsp: bool, rate: u32) -> Output {
-        if (sound_server || !dsp) && out123 {
+    /// The first that is there: out123; pacat, if a sound server runs;
+    /// aplay. All of them mix with other programs (through the server, or
+    /// alsa-lib's dmix where configured), so they come before `/dev/dsp`,
+    /// which is exclusive: the last resort, and the bare machine's way.
+    /// With nothing at all, `/dev/dsp` is still the choice — if it is
+    /// missing too, opening it fails with a message saying what to install.
+    pub fn pick(f: &Found, rate: u32) -> Output {
+        if f.out123 {
             Output::Command(SinkCommand::out123(&[], rate))
+        } else if f.sound_server && f.pacat {
+            Output::Command(SinkCommand::pacat(rate))
+        } else if f.aplay {
+            Output::Command(SinkCommand::aplay(rate))
         } else {
             Output::Oss("/dev/dsp".into())
         }
@@ -207,6 +252,15 @@ impl From<SinkCommand> for Output {
     fn from(c: SinkCommand) -> Output {
         Output::Command(c)
     }
+}
+
+/// A missing OSS device, when it was the last resort, gets the full story.
+fn nothing_to_play_through(e: io::Error) -> io::Error {
+    if e.kind() != io::ErrorKind::NotFound {
+        return e;
+    }
+    let hint = "nothing to play through: install mpg123 (it brings out123), alsa-utils (aplay) or pulseaudio-utils (pacat), or load the kernel's OSS emulation (snd-pcm-oss)";
+    io::Error::new(e.kind(), format!("{e}; {hint}"))
 }
 
 /// The player's handle on the running output.
@@ -223,7 +277,7 @@ impl SinkHandle {
                 Ok((SinkHandle::Process(p), Box::new(stdin)))
             }
             Output::Oss(path) => {
-                let (c, f) = crate::oss::open(path, rate)?;
+                let (c, f) = crate::oss::open(path, rate).map_err(nothing_to_play_through)?;
                 Ok((SinkHandle::Oss(c), Box::new(f)))
             }
         }
@@ -835,13 +889,46 @@ pub(crate) mod tests {
     #[test]
     fn output_choice() {
         let out123 = Output::Command(SinkCommand::out123(&[], 44100));
+        let pacat = Output::Command(SinkCommand::pacat(44100));
+        let aplay = Output::Command(SinkCommand::aplay(44100));
         let dsp = Output::Oss("/dev/dsp".into());
-        // (sound server, out123 installed, /dev/dsp present)
-        assert_eq!(Output::pick(true, true, true, 44100), out123, "a server owns the device and mixes");
-        assert_eq!(Output::pick(false, true, true, 44100), dsp, "a bare machine: straight to the device");
-        assert_eq!(Output::pick(false, true, false, 44100), out123, "no /dev/dsp: alsa-lib through out123");
-        assert_eq!(Output::pick(true, false, true, 44100), dsp, "no out123: the device is all there is");
-        assert_eq!(Output::pick(false, false, false, 44100), dsp, "nothing: try the device, and say why it failed");
+        let f = |sound_server, out123, pacat, aplay| Found { sound_server, out123, pacat, aplay };
+        assert_eq!(Output::pick(&f(true, true, true, true), 44100), out123, "out123 first");
+        assert_eq!(Output::pick(&f(false, true, false, false), 44100), out123, "through alsa-lib: mixed, unlike /dev/dsp");
+        assert_eq!(Output::pick(&f(true, false, true, true), 44100), pacat, "no mpg123, a server: pacat");
+        assert_eq!(Output::pick(&f(false, false, true, true), 44100), aplay, "pacat without a server would fail: aplay");
+        assert_eq!(Output::pick(&f(true, false, false, true), 44100), aplay);
+        assert_eq!(Output::pick(&f(true, false, false, false), 44100), dsp, "nothing else: the device");
+        assert_eq!(Output::pick(&f(false, false, false, false), 44100), dsp, "the bare machine");
+    }
+
+    #[test]
+    fn programs_are_found_on_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = scratch("on-path");
+        let (a, b) = (d.join("a"), d.join("b"));
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(b.join("aplay"), b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(b.join("aplay"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(a.join("pacat"), b"not executable").unwrap();
+        let path = std::env::join_paths([&a, &b]).unwrap();
+        assert!(on_path("aplay", &path), "in the second directory");
+        assert!(!on_path("pacat", &path), "present but not executable");
+        assert!(!on_path("out123", &path));
+        assert!(!on_path("aplay", std::ffi::OsStr::new("")));
+    }
+
+    #[test]
+    fn sink_commands() {
+        let p = SinkCommand::pacat(22050);
+        assert_eq!(p.args, ["--playback", "--raw", "--format=s16le", "--channels=2", "--latency-msec=100", "--rate=22050"]);
+        let a = SinkCommand::aplay(22050);
+        assert_eq!(a.args, ["-q", "-t", "raw", "-f", "S16_LE", "-c", "2", "--buffer-time=200000", "-r", "22050", "-"]);
+        // With no device and nothing else, the failure says what to do.
+        let mut pl = Player::new(Decoding::Builtin { rate: 44100 }, Output::Oss("/nonexistent/dsp".into()), Arc::new(|| {}));
+        let e = pl.play("/nonexistent/x.mp3", 1).unwrap_err().to_string();
+        assert!(e.contains("/nonexistent/dsp") && e.contains("alsa-utils") && e.contains("snd-pcm-oss"), "{e}");
     }
 
     #[test]

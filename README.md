@@ -14,9 +14,11 @@ phonolite --skin ~/skins/Classic.wsz   # wear a skin (or a folder of its files)
 phonolite --rate 22050 --fps 10 ...    # a slow machine: half the work
 ```
 
-Nothing else is required: with neither mpg123 nor out123 installed, it
-decodes with its built-in decoder and plays to `/dev/dsp` (OSS; on ALSA
-systems the kernel's OSS emulation, `CONFIG_SND_PCM_OSS`).
+Nothing else is required: without mpg123 it decodes with its built-in
+decoder, and it plays through whichever of `out123`, `pacat` or `aplay` is
+installed, or straight to `/dev/dsp` (OSS; on ALSA systems the kernel's OSS
+emulation, `CONFIG_SND_PCM_OSS`). With none of those, it says what to
+install.
 
 ## What it does
 
@@ -62,11 +64,14 @@ ID3v1/v2 tags and the LAME/Xing header (length, seek table), resamples
 linearly to the session rate, and applies the equalizer in its subbands
 just as mpg123 does. It plays files; streams (`http://…`) need mpg123.
 
-**Output.** Through out123 when a sound server (PulseAudio, PipeWire) is
-running, since it owns the device and mixes; straight to `/dev/dsp` on a
-bare machine; out123 again if there is no `/dev/dsp` (alsa-lib, perhaps
-with its dmix mixer). `/dev/dsp` is exclusive: nothing else plays while
-phonolite has it (dmix lives in alsa-lib, which OSS bypasses).
+**Output.** The first of these that is installed: `out123` (with mpg123);
+`pacat` when a PulseAudio or PipeWire server runs; `aplay` (alsa-utils).
+All of them mix with other programs — through the server, or alsa-lib's
+dmix where it is configured — so they come before `/dev/dsp`, which is
+exclusive (dmix lives in alsa-lib, and OSS bypasses it): the last resort,
+and the way on a bare machine. `--dsp`, `-o` and `--sink` choose
+explicitly. PipeWire's own `pw-cat` is not used: it reads only files with
+a header, not a raw stream; its Pulse layer serves `pacat`.
 
 One decoder, one pass over the samples: the visualizer reads the samples
 on their way to the sink instead of decoding the file a second time. The

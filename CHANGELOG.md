@@ -42,7 +42,12 @@ First version: a classic-skinned mpg123 frontend on protolith.
   noise, never a panic. ID3v1/v2 tags, LAME/Xing length and seek table,
   linear resampling, the equalizer in its subbands. The playback tests run
   on both decoders.
-- **Direct OSS output** (`/dev/dsp`), chosen when no sound server runs:
+- **More ways out**: `pacat` (PulseAudio, PipeWire's Pulse layer) and
+  `aplay` (alsa-utils) as sinks, found on `PATH`; mixing outputs before
+  the exclusive `/dev/dsp`; with nothing to play through, the error says
+  what to install. Both argument lists were checked playing into real
+  programs (ALSA's null device, a PulseAudio null sink).
+- **Direct OSS output** (`/dev/dsp`), the last resort and the bare machine's:
   the one module with `unsafe` (libc's `ioctl` for format, channels, rate,
   fragments and reset); a test keeps `unsafe` out of every other file.
 - **The i486 build** (`tools/build-i486.sh`, Stele's target and recipe):
