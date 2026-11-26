@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use phonolite::app::{App, Options};
 use phonolite::engine::Mpg123;
-use phonolite::player::{SinkCommand, Status};
+use phonolite::player::{Decoding, SinkCommand, Status};
 use phonolite::testsignal;
 use protolith::x11::{Connection, Event, Modifiers, MouseButton};
 use protolith::Rect;
@@ -69,8 +69,14 @@ fn music(name: &str, n: usize, seconds: f64) -> Vec<PathBuf> {
 
 fn app(x: &Xvfb, files: Vec<PathBuf>) -> App {
     let conn = Connection::open_display(&x.display, None).expect("connect");
-    let opts =
-        Options { skin: None, mpg123: Mpg123::default(), sink: SinkCommand::out123(&["-o".into(), "sleep".into()], 44100), fps: 30, files, config_dir: None };
+    let opts = Options {
+        skin: None,
+        decoding: Decoding::Mpg123(Mpg123::default()),
+        sink: SinkCommand::out123(&["-o".into(), "sleep".into()], 44100).into(),
+        fps: 30,
+        files,
+        config_dir: None,
+    };
     App::new(conn, opts).expect("app")
 }
 
@@ -201,8 +207,14 @@ fn region_txt_shapes_the_window() {
     // A skin of nothing but a region: a 200x100 triangle.
     std::fs::write(dir.join("region.txt"), "[Normal]\nNumPoints=3\nPointList=0,0, 200,0, 0,100\n").unwrap();
     let conn = Connection::open_display(&x.display, None).unwrap();
-    let opts =
-        Options { skin: Some(dir.clone()), mpg123: Mpg123::default(), sink: SinkCommand::out123(&[], 44100), fps: 30, files: Vec::new(), config_dir: None };
+    let opts = Options {
+        skin: Some(dir.clone()),
+        decoding: Decoding::Mpg123(Mpg123::default()),
+        sink: SinkCommand::out123(&[], 44100).into(),
+        fps: 30,
+        files: Vec::new(),
+        config_dir: None,
+    };
     let mut a = App::new(conn, opts).unwrap();
     // Hide the equalizer and playlist: only the player's shape is left.
     click(&mut a, 225, 62);

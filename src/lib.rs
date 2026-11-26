@@ -18,16 +18,21 @@
 //!   on their way to the sink.
 //! - [`app`] / [`config`] — the windows and the settings kept between runs.
 
-#![forbid(unsafe_code)]
+// unsafe_code is denied everywhere but the one module that must talk to
+// the sound device (`oss`: libc's ioctl); a test keeps it there.
+#![deny(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms, unreachable_pub)]
 
 pub mod app;
 pub mod audio;
+pub mod builtin;
 pub mod config;
 pub mod engine;
 pub mod eq;
 pub mod inflate;
+pub mod mpeg;
 pub mod num;
+pub mod oss;
 pub mod player;
 pub mod playlist;
 pub mod remote;

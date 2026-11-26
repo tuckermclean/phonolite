@@ -6,9 +6,13 @@ purpose; doc comments and `README.md` say *what* it is.
 ## The non-negotiables
 
 1. **One dependency: protolith.** It draws, takes input, and provides the
-   widgets. Audio is mpg123's (a separate program); everything else
-   (inflate, ZIP, FFT, M3U/PLS) is here in std-only Rust. No `unsafe`
-   (`#![forbid(unsafe_code)]`).
+   widgets. Decoding is mpg123's when it is installed, else the built-in
+   decoder's (`src/mpeg/`, minimp3 ported); everything else (inflate,
+   ZIP, FFT, M3U/PLS) is here in std-only Rust. **`unsafe` lives only in
+   `src/oss.rs`** — libc's `ioctl` with the OSS requests that take one
+   `int`, because setting a sound device's format has no safe route. The
+   crate denies `unsafe_code` and a test fails if the word appears in any
+   other file; widening that needs the user's say.
 2. **It runs on a Pentium; a 486DX2 is the stretch goal** — like Stele
    and protolith, which exist for that hardware. The build that counts is
    `tools/build-i486.sh` (Stele's i486 musl target, std rebuilt, panics
@@ -51,12 +55,16 @@ real time, and races show only under load. Needs `mpg123` (which brings
    Python zlib fixtures), skin parsers and geometry, FFT (against a naive
    DFT), the audio pump (in-memory sources and sinks: order, pacing,
    pause/replay, gapless, flush).
-2. Real processes: mpg123 decoding generated MPEG-1 Layer I tones
+2. The decoder: against mpg123's decode of `tests/data/mpeg/` (LAME and
+   ffmpeg encodes of generated signals, made in a throwaway Alpine
+   container; within 1 LSB, aligned for the LAME Info frame), corrupt
+   input never panics. The player's playback tests run on both decoders.
+3. Real processes: mpg123 decoding generated MPEG-1 Layer I tones
    (`src/testsignal.rs` — a tone per subband is a known frequency), into
    `out123 -O file` (to measure what came out) or `out123 -o sleep`
    (real-time output with no sound card).
-3. Panes with synthetic protolith events (`WindowId::from_xid`).
-4. Xvfb end to end (`tests/xvfb.rs`): the app in-process on a real server;
+4. Panes with synthetic protolith events (`WindowId::from_xid`).
+5. Xvfb end to end (`tests/xvfb.rs`): the app in-process on a real server;
    the window read back must equal the last frame, and the last frame must
    equal a from-scratch render (catches stale caching).
 

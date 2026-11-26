@@ -21,9 +21,8 @@ use protolith::x11::{Connection, Event, Key, MouseButton, WindowId, WindowOption
 use protolith::Rect;
 
 use crate::config::Config;
-use crate::engine::Mpg123;
 use crate::eq::{Equalizer, PRESETS};
-use crate::player::{Player, SinkCommand, Status, Update};
+use crate::player::{Decoding, Output, Player, Status, Update};
 use crate::playlist::{self, format_time, Entry, Playlist};
 use crate::skin::layout::{HEIGHT, WIDTH};
 use crate::skin::{self, Skin};
@@ -40,10 +39,10 @@ use popup::{Cmd, Menu};
 pub struct Options {
     /// A skin to wear (overrides the saved one).
     pub skin: Option<PathBuf>,
-    /// How to run mpg123.
-    pub mpg123: Mpg123,
-    /// How to run the sound sink.
-    pub sink: SinkCommand,
+    /// What decodes: mpg123 or the built-in decoder.
+    pub decoding: Decoding,
+    /// Where the sound goes.
+    pub sink: Output,
     /// Animation frames per second while playing.
     pub fps: u32,
     /// Files, folders, playlists or URLs to play (replacing the saved
@@ -139,7 +138,7 @@ impl App {
                 let _ = w.wake();
             }
         });
-        let mut player = Player::new(opts.mpg123.clone(), opts.sink.clone(), notify);
+        let mut player = Player::new(opts.decoding.clone(), opts.sink.clone(), notify);
         player.set_volume(cfg.volume);
         player.set_balance(cfg.balance);
         let _ = player.set_equalizer(cfg.eq.clone());
@@ -172,7 +171,7 @@ impl App {
         eq.set(&cfg.eq, cfg.eq_auto);
         let pl = PlaylistPane::new(cfg.pl_height);
         let mut main = MainPane::new();
-        main.spectrum = crate::vis::Spectrum::with_rate(opts.mpg123.rate);
+        main.spectrum = crate::vis::Spectrum::with_rate(opts.decoding.rate());
         let now = Instant::now();
         let mut app = App {
             conn,

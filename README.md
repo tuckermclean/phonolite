@@ -1,10 +1,12 @@
 # phonolite
 
-A skinnable MP3 player for X11 — a frontend to
-[mpg123](https://mpg123.de) that wears classic 2.x skins (`.wsz`), drawn
-with [protolith](https://github.com/tuckermclean/protolith). No toolkit, no
-C libraries, no `unsafe`; one Rust dependency. Small and frugal enough to
-aim at a 486.
+A skinnable MP3 player for X11 that wears classic 2.x skins (`.wsz`),
+drawn with [protolith](https://github.com/tuckermclean/protolith). It
+plays through [mpg123](https://mpg123.de) when that is installed and
+decodes MPEG audio itself when it is not; it plays through `out123`, or
+straight to the sound device. No toolkit, no C libraries, one Rust
+dependency, and `unsafe` in exactly one small module (the sound device's
+`ioctl`s). Small and frugal enough to aim at a 486.
 
 ```sh
 phonolite ~/Music                      # a folder, files, .m3u/.pls, or URLs
@@ -12,7 +14,9 @@ phonolite --skin ~/skins/Classic.wsz   # wear a skin (or a folder of its files)
 phonolite --rate 22050 --fps 10 ...    # a slow machine: half the work
 ```
 
-Needs `mpg123` at run time (it brings `out123`, which plays the sound).
+Nothing else is required: with neither mpg123 nor out123 installed, it
+decodes with its built-in decoder and plays to `/dev/dsp` (OSS; on ALSA
+systems the kernel's OSS emulation, `CONFIG_SND_PCM_OSS`).
 
 ## What it does
 
@@ -42,10 +46,27 @@ Needs `mpg123` at run time (it brings `out123`, which plays the sound).
 ## How the audio works
 
 ```
-mpg123 -R  ──raw PCM──▶  phonolite pump  ──▶  out123 ──▶ sound card
-(decodes,                (volume, balance,
- EQ in its subbands)      visualizer tap)
+mpg123 -R ─────┐                               ┌──▶ out123 ──▶ sound card
+ (or the        ├──raw PCM──▶ phonolite pump ──┤
+ built-in       │             (volume, balance,└──▶ /dev/dsp (OSS)
+ decoder) ──────┘              visualizer tap)
 ```
+
+**Decoding.** mpg123 when it runs (`--decoder auto`, the default), else the
+built-in decoder (`src/mpeg/`): MPEG-1/2/2.5 Layers I, II and III, a port
+to safe Rust of [minimp3](https://github.com/lieff/minimp3) (public domain,
+CC0; `third_party/minimp3/`). On every test file — LAME and ffmpeg encodes
+at MPEG-1/2/2.5, mono, stereo, joint stereo, CBR and VBR, Layers II and III
+— its output is within one least significant bit of mpg123's. It reads
+ID3v1/v2 tags and the LAME/Xing header (length, seek table), resamples
+linearly to the session rate, and applies the equalizer in its subbands
+just as mpg123 does. It plays files; streams (`http://…`) need mpg123.
+
+**Output.** Through out123 when a sound server (PulseAudio, PipeWire) is
+running, since it owns the device and mixes; straight to `/dev/dsp` on a
+bare machine; out123 again if there is no `/dev/dsp` (alsa-lib, perhaps
+with its dmix mixer). `/dev/dsp` is exclusive: nothing else plays while
+phonolite has it (dmix lives in alsa-lib, which OSS bypasses).
 
 One decoder, one pass over the samples: the visualizer reads the samples
 on their way to the sink instead of decoding the file a second time. The
@@ -59,11 +80,18 @@ Tracks that run into each other are queued back to back with no gap.
 
 It is meant for a Pentium, with a 486DX2 as the stretch goal. Built for
 that (`tools/build-i486.sh`: 32-bit static musl for an i486, std rebuilt
-from source, panics aborting), phonolite is **423 KB**; a program that does
-nothing, built the same way, is 58 KB (KB here: 1000 bytes). CI holds it under a 440 KB budget.
-The size pass that set it found, and removed, 147 KB: unwind tables and
+from source, panics aborting), phonolite is **468 KB**, of which the
+built-in decoder and direct output are 45 KB; a program that does nothing,
+built the same way, is 58 KB (KB here: 1000 bytes). CI holds it under a
+480 KB budget. A size pass found, and removed, 147 KB: unwind tables and
 the unwinder (nothing unwinds), std's float formatting and parsing, libm,
 and libc's DNS resolver (via protolith).
+
+The built-in decoder decodes 320 kbit/s stereo at 283× real time on one
+modern core as built (`opt-level = "z"`), 405× at `opt-level = 3` — the
+same as mpg123's portable C path (mpg123 with AVX: 2× faster). On a 486
+mpg123's hand-tuned x86 code will be faster still; the built-in decoder is
+for when mpg123 is not there. Its speed on a real 486 is unmeasured.
 
 CPU, measured on x86_64 with the visualizer on over 20 s of playback (as a
 share of one modern core; the test audio is MPEG Layer I, cheaper to decode
@@ -93,6 +121,8 @@ arrows, Enter and Delete act on it.
 -o, --output MODULE  out123 output module: alsa, pulse, oss, jack, ...
     --sink COMMAND   another sink reading raw 16-bit stereo on stdin
     --mpg123 PATH    the mpg123 program to run
+    --decoder WHICH  auto (mpg123 if it runs, else built in), mpg123, builtin
+    --dsp DEVICE     play straight to an OSS device (e.g. /dev/dsp)
     --fps N          animation frames per second (default 30)
     --rate HZ        decode at this sample rate (default 44100)
     --no-config      neither load nor save settings and playlist
@@ -111,6 +141,13 @@ arrows, Enter and Delete act on it.
 - No mini-browser, video window, `gen.bmp` windows or skin cursors.
 - Displayed time and the visualizer follow what has been sent to the sink,
   not the sound card's own latency.
+- The built-in decoder does not trim the encoder's delay and padding (LAME
+  records them; mpg123 removes them), so its track changes carry a few
+  milliseconds of extra silence; it resamples linearly; its intensity
+  stereo is ported but untested (LAME never writes it).
+- Direct output is OSS only, and exclusive. Native ALSA would need far
+  more `unsafe`; dmix needs alsa-lib. Its `ioctl`s are tested against a
+  fake device and a non-device file only — no sound card was at hand.
 
 ## Development
 

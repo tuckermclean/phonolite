@@ -35,8 +35,19 @@ First version: a classic-skinned mpg123 frontend on protolith.
   the server. Measured: 1.65 % of a core at 30 fps, 0.95 % at
   `--rate 22050 --fps 10`.
 - Settings and playlist kept in `$XDG_CONFIG_HOME/phonolite`.
+- **A built-in decoder** for when mpg123 is not installed (`--decoder
+  auto`, the default, prefers mpg123): MPEG-1/2/2.5 Layers I–III, minimp3
+  ported to safe Rust (CC0), its tables extracted by script. Within one
+  LSB of mpg123 on twelve LAME/ffmpeg fixtures; corrupt input decodes to
+  noise, never a panic. ID3v1/v2 tags, LAME/Xing length and seek table,
+  linear resampling, the equalizer in its subbands. The playback tests run
+  on both decoders.
+- **Direct OSS output** (`/dev/dsp`), chosen when no sound server runs:
+  the one module with `unsafe` (libc's `ioctl` for format, channels, rate,
+  fragments and reset); a test keeps `unsafe` out of every other file.
 - **The i486 build** (`tools/build-i486.sh`, Stele's target and recipe):
-  423 KB, from 570 KB, under a 440 KB budget in CI. Cut: unwind tables
+  423 KB, from 570 KB, under a 440 KB budget in CI (468 KB and a 480 KB
+  budget with the built-in decoder and direct output). Cut: unwind tables
   (`-Cforce-unwind-tables=no`) and the unwinder (an empty `libunwind`
   stand-in instead of `libgcc_eh`), std's float formatting and parsing
   and musl's libm (replaced by `num`, tested against std), and libc's DNS

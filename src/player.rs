@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::audio::{Audio, Snapshot, UNITY};
+use crate::builtin;
 use crate::engine::{Engine, Mpg123};
 use crate::eq::Equalizer;
 use crate::remote::{id3v1_fields, Command, Message, PlayState, StreamInfo};
@@ -169,6 +170,81 @@ impl SinkCommand {
     }
 }
 
+/// Where the sound goes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Output {
+    /// A program reading raw samples on stdin (out123, aplay, …).
+    Command(SinkCommand),
+    /// Straight to an OSS device (`/dev/dsp`), at this rate.
+    Oss(std::path::PathBuf),
+}
+
+impl Output {
+    /// The usual choice: through out123 when a sound server is running
+    /// (the device belongs to it, and it mixes); else straight to
+    /// `/dev/dsp` if there is one (a bare machine: the 486); else out123
+    /// (alsa-lib, perhaps with dmix).
+    pub fn choose(rate: u32) -> Output {
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from);
+        let server = runtime.is_some_and(|d| d.join("pulse/native").exists() || d.join("pipewire-0").exists());
+        let out123 =
+            Process::new("out123").arg("--version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+        let dsp = std::path::Path::new("/dev/dsp");
+        Output::pick(server, out123, crate::oss::exists(dsp), rate)
+    }
+
+    /// [`Output::choose`]'s rule, given what it found.
+    pub fn pick(sound_server: bool, out123: bool, dsp: bool, rate: u32) -> Output {
+        if (sound_server || !dsp) && out123 {
+            Output::Command(SinkCommand::out123(&[], rate))
+        } else {
+            Output::Oss("/dev/dsp".into())
+        }
+    }
+}
+
+impl From<SinkCommand> for Output {
+    fn from(c: SinkCommand) -> Output {
+        Output::Command(c)
+    }
+}
+
+/// The player's handle on the running output.
+enum SinkHandle {
+    Process(SinkProcess),
+    Oss(crate::oss::Control),
+}
+
+impl SinkHandle {
+    fn open(out: &Output, rate: u32) -> io::Result<(SinkHandle, crate::audio::Sink)> {
+        match out {
+            Output::Command(cmd) => {
+                let (p, stdin) = SinkProcess::spawn(cmd)?;
+                Ok((SinkHandle::Process(p), Box::new(stdin)))
+            }
+            Output::Oss(path) => {
+                let (c, f) = crate::oss::open(path, rate)?;
+                Ok((SinkHandle::Oss(c), Box::new(f)))
+            }
+        }
+    }
+
+    /// Let it play out what it holds.
+    fn finish(self) {
+        match self {
+            SinkHandle::Process(p) => p.finish(),
+            SinkHandle::Oss(c) => c.finish(),
+        }
+    }
+
+    fn complaint(&self) -> String {
+        match self {
+            SinkHandle::Process(p) => p.stderr.lock().unwrap().clone(),
+            SinkHandle::Oss(_) => String::new(),
+        }
+    }
+}
+
 struct SinkProcess {
     child: Option<Child>,
     stderr: Arc<Mutex<String>>,
@@ -219,10 +295,76 @@ impl Drop for SinkProcess {
     }
 }
 
+/// What decodes: mpg123, or the built-in decoder.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decoding {
+    /// Run mpg123 (one process per track).
+    Mpg123(Mpg123),
+    /// Decode in-process, at this sample rate.
+    Builtin {
+        /// Output rate.
+        rate: u32,
+    },
+}
+
+impl Decoding {
+    /// mpg123 if it runs, else the built-in decoder at the same rate.
+    pub fn prefer_mpg123(m: Mpg123) -> Decoding {
+        let runs =
+            Process::new(&m.program).arg("--version").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+        if runs {
+            Decoding::Mpg123(m)
+        } else {
+            Decoding::Builtin { rate: m.rate }
+        }
+    }
+
+    /// The output sample rate.
+    pub fn rate(&self) -> u32 {
+        match self {
+            Decoding::Mpg123(m) => m.rate,
+            Decoding::Builtin { rate } => *rate,
+        }
+    }
+}
+
+/// One track's decoder, whichever kind.
+enum Backend {
+    Mpg123(Engine),
+    Builtin(builtin::Engine),
+}
+
+impl Backend {
+    fn send(&mut self, c: &Command) -> io::Result<()> {
+        match self {
+            Backend::Mpg123(e) => e.send(c),
+            Backend::Builtin(e) => e.send(c),
+        }
+    }
+    fn try_recv(&self) -> Option<Message> {
+        match self {
+            Backend::Mpg123(e) => e.try_recv(),
+            Backend::Builtin(e) => e.try_recv(),
+        }
+    }
+    fn kill(&mut self) {
+        match self {
+            Backend::Mpg123(e) => e.kill(),
+            Backend::Builtin(e) => e.kill(),
+        }
+    }
+    fn finish(&mut self) {
+        match self {
+            Backend::Mpg123(e) => e.finish(),
+            Backend::Builtin(e) => e.finish(),
+        }
+    }
+}
+
 struct Segment {
     id: u64,
     tag: u64,
-    engine: Engine,
+    engine: Backend,
     track: Track,
     /// Seconds into the track where this segment's audio begins.
     offset: f64,
@@ -234,11 +376,11 @@ struct Segment {
 
 /// The player.
 pub struct Player {
-    mpg123: Mpg123,
-    sink_cmd: SinkCommand,
+    decoding: Decoding,
+    output: Output,
     notify: Arc<dyn Fn() + Send + Sync>,
     audio: Audio,
-    sink: Option<SinkProcess>,
+    sink: Option<SinkHandle>,
     segments: Vec<Segment>,
     next_id: u64,
     status: Status,
@@ -250,12 +392,12 @@ pub struct Player {
 
 impl Player {
     /// A player; processes start on first use.
-    pub fn new(mpg123: Mpg123, sink: SinkCommand, notify: Arc<dyn Fn() + Send + Sync>) -> Player {
+    pub fn new(decoding: Decoding, output: impl Into<Output>, notify: Arc<dyn Fn() + Send + Sync>) -> Player {
         let n = notify.clone();
-        let audio = Audio::new(mpg123.rate, Box::new(move || n()));
+        let audio = Audio::new(decoding.rate(), Box::new(move || n()));
         let mut p = Player {
-            mpg123,
-            sink_cmd: sink,
+            decoding,
+            output: output.into(),
             notify,
             audio,
             sink: None,
@@ -282,9 +424,9 @@ impl Player {
     }
 
     fn start_sink(&mut self) -> io::Result<()> {
-        let (proc_, stdin) = SinkProcess::spawn(&self.sink_cmd)?;
-        self.sink = Some(proc_);
-        self.audio.set_sink(Box::new(stdin));
+        let (handle, writer) = SinkHandle::open(&self.output, self.decoding.rate())?;
+        self.sink = Some(handle);
+        self.audio.set_sink(writer);
         Ok(())
     }
 
@@ -320,23 +462,35 @@ impl Player {
 
     fn spawn_segment(&mut self, path: &str, tag: u64, offset: f64, keep: Option<Track>) -> io::Result<()> {
         let n = self.notify.clone();
-        let mut engine = Engine::spawn(&self.mpg123, Box::new(move || n()))?;
-        let audio = engine.take_audio().ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "no audio pipe"))?;
         let id = self.next_id;
         self.next_id += 1;
         let track = keep.unwrap_or_else(|| Track { path: path.into(), ..Track::default() });
-        let mut seg = Segment { id, tag, engine, track, offset, ended: false, sent_eq: None };
-        Self::send_eq(&self.eq, &mut seg)?;
-        if offset > 0.0 {
-            // Loaded paused, so nothing before the jump reaches the pipe.
-            seg.engine.send(&Command::LoadPaused(path.into()))?;
-            seg.engine.send(&Command::JumpTo(offset))?;
-            seg.engine.send(&Command::Pause)?;
-        } else {
-            seg.engine.send(&Command::Load(path.into()))?;
-        }
-        self.audio.queue(id, Box::new(audio));
-        self.segments.push(seg);
+        let audio: crate::audio::Source = match &self.decoding {
+            Decoding::Mpg123(cfg) => {
+                let mut engine = Engine::spawn(cfg, Box::new(move || n()))?;
+                let audio = engine.take_audio().ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "no audio pipe"))?;
+                let mut seg = Segment { id, tag, engine: Backend::Mpg123(engine), track, offset, ended: false, sent_eq: None };
+                Self::send_eq(&self.eq, &mut seg)?;
+                if offset > 0.0 {
+                    // Loaded paused, so nothing before the jump reaches the pipe.
+                    seg.engine.send(&Command::LoadPaused(path.into()))?;
+                    seg.engine.send(&Command::JumpTo(offset))?;
+                    seg.engine.send(&Command::Pause)?;
+                } else {
+                    seg.engine.send(&Command::Load(path.into()))?;
+                }
+                self.segments.push(seg);
+                Box::new(audio)
+            }
+            Decoding::Builtin { rate } => {
+                // Its equalizer starts set, so not even the first frame is flat.
+                let f = self.eq.factors(0, 44100);
+                let (engine, audio) = builtin::Engine::start(path, offset, *rate, f, Box::new(move || n()))?;
+                self.segments.push(Segment { id, tag, engine: Backend::Builtin(engine), track, offset, ended: false, sent_eq: Some((f, 44100)) });
+                Box::new(audio)
+            }
+        };
+        self.audio.queue(id, audio);
         Ok(())
     }
 
@@ -368,9 +522,9 @@ impl Player {
                 self.status = Status::Paused;
             }
             Status::Paused => {
-                let (proc_, stdin) = SinkProcess::spawn(&self.sink_cmd)?;
-                self.sink = Some(proc_);
-                self.audio.resume(Box::new(stdin));
+                let (handle, writer) = SinkHandle::open(&self.output, self.decoding.rate())?;
+                self.sink = Some(handle);
+                self.audio.resume(writer);
                 self.status = Status::Playing;
             }
         }
@@ -554,7 +708,7 @@ impl Player {
 
         let snap = self.audio.snapshot();
         if snap.sink_failed && self.status == Status::Playing {
-            let why = self.sink.as_ref().map(|s| s.stderr.lock().unwrap().clone()).unwrap_or_default();
+            let why = self.sink.as_ref().map(SinkHandle::complaint).unwrap_or_default();
             out.push(Update::Error(if why.is_empty() { "the audio output stopped".into() } else { format!("audio output: {why}") }));
             self.stop();
             push(&mut out, Update::Status);
@@ -599,6 +753,28 @@ pub(crate) mod tests {
     use crate::engine::tests::{have_mpg123, scratch};
     use crate::testsignal;
     use std::time::{Duration, Instant};
+
+    /// Both decoders at `rate`: every playback test runs on each.
+    fn both(rate: u32) -> [Decoding; 2] {
+        [Decoding::Mpg123(Mpg123 { rate, ..Mpg123::default() }), Decoding::Builtin { rate }]
+    }
+
+    /// Says which decoder was running when a test fails.
+    struct With(&'static str);
+    impl Drop for With {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                eprintln!("(with the {} decoder)", self.0);
+            }
+        }
+    }
+
+    fn label(d: &Decoding) -> &'static str {
+        match d {
+            Decoding::Mpg123(_) => "mpg123",
+            Decoding::Builtin { .. } => "built-in",
+        }
+    }
 
     /// Real-time output without a sound card.
     pub(crate) fn sleep_sink() -> SinkCommand {
@@ -657,6 +833,18 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn output_choice() {
+        let out123 = Output::Command(SinkCommand::out123(&[], 44100));
+        let dsp = Output::Oss("/dev/dsp".into());
+        // (sound server, out123 installed, /dev/dsp present)
+        assert_eq!(Output::pick(true, true, true, 44100), out123, "a server owns the device and mixes");
+        assert_eq!(Output::pick(false, true, true, 44100), dsp, "a bare machine: straight to the device");
+        assert_eq!(Output::pick(false, true, false, 44100), out123, "no /dev/dsp: alsa-lib through out123");
+        assert_eq!(Output::pick(true, false, true, 44100), dsp, "no out123: the device is all there is");
+        assert_eq!(Output::pick(false, false, false, 44100), dsp, "nothing: try the device, and say why it failed");
+    }
+
+    #[test]
     fn volume_and_balance_gains() {
         assert_eq!(volume_percent(50), 25.0);
         assert_eq!(volume_percent(300), 100.0);
@@ -680,11 +868,18 @@ pub(crate) mod tests {
         if !have_mpg123() {
             return;
         }
-        let d = scratch("player-gapless");
+        for dec in both(44100) {
+            gapless(dec);
+        }
+    }
+
+    fn gapless(dec: Decoding) {
+        let _w = With(label(&dec));
+        let d = scratch(&format!("player-gapless-{}", label(&dec)));
         let a = write_tone(&d, "a.mp3", "First", 2, 0.4);
         let b = write_tone(&d, "b.mp3", "Second", 6, 0.4);
         let out = d.join("out.raw");
-        let mut p = Player::new(Mpg123::default(), file_sink(&out), Arc::new(|| {}));
+        let mut p = Player::new(dec, file_sink(&out), Arc::new(|| {}));
         p.set_volume(100);
         p.play(&a, 1).unwrap();
         let mut titles = Vec::new();
@@ -718,11 +913,18 @@ pub(crate) mod tests {
         if !have_mpg123() {
             return;
         }
-        let d = scratch("player-settings");
+        for dec in both(44100) {
+            settings(dec);
+        }
+    }
+
+    fn settings(dec: Decoding) {
+        let _w = With(label(&dec));
+        let d = scratch(&format!("player-settings-{}", label(&dec)));
         let a = write_tone(&d, "a.mp3", "T", 2, 0.3);
         let run = |volume: u32, balance: i32, eq: Equalizer| {
             let out = d.join(format!("o-{volume}-{balance}-{}.raw", eq.on));
-            let mut p = Player::new(Mpg123::default(), file_sink(&out), Arc::new(|| {}));
+            let mut p = Player::new(dec.clone(), file_sink(&out), Arc::new(|| {}));
             p.set_volume(volume);
             p.set_balance(balance);
             p.set_equalizer(eq).unwrap();
@@ -749,11 +951,17 @@ pub(crate) mod tests {
         if !have_mpg123() {
             return;
         }
-        let d = scratch("player-rate");
+        for dec in both(22050) {
+            half_rate(dec);
+        }
+    }
+
+    fn half_rate(dec: Decoding) {
+        let _w = With(label(&dec));
+        let d = scratch(&format!("player-rate-{}", label(&dec)));
         let a = write_tone(&d, "a.mp3", "T", 2, 0.5);
         let out = d.join("half.raw");
-        let mpg = Mpg123 { rate: 22050, ..Mpg123::default() };
-        let mut p = Player::new(mpg, SinkCommand::out123(&["-O".into(), out.to_str().unwrap().into()], 22050), Arc::new(|| {}));
+        let mut p = Player::new(dec, SinkCommand::out123(&["-O".into(), out.to_str().unwrap().into()], 22050), Arc::new(|| {}));
         p.play(&a, 0).unwrap();
         run_until(&mut p, "a quarter second", |p, _| p.position() > 0.25);
         assert!(p.position() < 0.45, "the clock runs at the right rate: {}", p.position());
@@ -768,9 +976,16 @@ pub(crate) mod tests {
         if !have_mpg123() {
             return;
         }
-        let d = scratch("player-seek");
+        for dec in both(44100) {
+            pause_seek(dec);
+        }
+    }
+
+    fn pause_seek(dec: Decoding) {
+        let _w = With(label(&dec));
+        let d = scratch(&format!("player-seek-{}", label(&dec)));
         let a = write_tone(&d, "a.mp3", "Long", 2, 4.0);
-        let mut p = Player::new(Mpg123::default(), sleep_sink(), Arc::new(|| {}));
+        let mut p = Player::new(dec, sleep_sink(), Arc::new(|| {}));
         p.play(&a, 7).unwrap();
         run_until(&mut p, "half a second in", |p, _| p.position() >= 0.5);
         let t = p.current().unwrap().0.clone();

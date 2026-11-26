@@ -1,11 +1,13 @@
 //! phonolite: a skinnable MP3 player for X11, a frontend to mpg123.
 
+#![forbid(unsafe_code)]
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use phonolite::app::{App, Options};
 use phonolite::engine::Mpg123;
-use phonolite::player::SinkCommand;
+use phonolite::player::{Decoding, Output, SinkCommand};
 
 const HELP: &str = "\
 phonolite — a skinnable MP3 player for X11, a frontend to mpg123
@@ -17,6 +19,10 @@ usage: phonolite [options] [file | folder | playlist | URL]...
       --sink COMMAND   another sound sink (a command reading raw 16-bit
                        44.1 kHz stereo on stdin, e.g. \"aplay -q -f cd\")
       --mpg123 PATH    the mpg123 program to run
+      --decoder WHICH  auto (default: mpg123 if it runs, else built in),
+                       mpg123, or builtin
+      --dsp DEVICE     play straight to an OSS device (e.g. /dev/dsp)
+                       rather than choosing an output
       --fps N          animation frames per second (default 30)
       --rate HZ        decode at this sample rate (default 44100); on a
                        slow machine --rate 22050 --fps 10 halves the work
@@ -32,10 +38,13 @@ playlist;  Ctrl+Q  quit.  Right-click for the menu.
 ";
 
 fn parse() -> Result<Options, String> {
+    let mut mpg123 = Mpg123::default();
+    let mut decoder = String::from("auto");
+    let mut dsp: Option<PathBuf> = None;
     let mut opts = Options {
         skin: None,
-        mpg123: Mpg123::default(),
-        sink: SinkCommand::out123(&[], phonolite::audio::RATE),
+        decoding: Decoding::Builtin { rate: phonolite::audio::RATE },
+        sink: Output::Oss("/dev/dsp".into()),
         fps: 30,
         files: Vec::new(),
         config_dir: phonolite::config::dir(),
@@ -58,24 +67,35 @@ fn parse() -> Result<Options, String> {
             "-s" | "--skin" => opts.skin = Some(PathBuf::from(value(&s)?)),
             "-o" | "--output" => output = Some(value(&s)?),
             "--sink" => sink = Some(value(&s)?),
-            "--mpg123" => opts.mpg123.program = value(&s)?,
+            "--mpg123" => mpg123.program = value(&s)?,
+            "--decoder" => decoder = value(&s)?,
+            "--dsp" => dsp = Some(PathBuf::from(value(&s)?)),
             "--fps" => opts.fps = value(&s)?.parse().map_err(|_| "--fps needs a number".to_string())?,
-            "--rate" => opts.mpg123.rate = value(&s)?.parse().ok().filter(|r| (8000..=192000).contains(r)).ok_or("--rate needs a sample rate in Hz")?,
+            "--rate" => mpg123.rate = value(&s)?.parse().ok().filter(|r| (8000..=192000).contains(r)).ok_or("--rate needs a sample rate in Hz")?,
             "--no-config" => opts.config_dir = None,
             "--" => opts.files.extend(args.by_ref().map(PathBuf::from)),
             _ if s.starts_with('-') && s.len() > 1 => return Err(format!("unknown option {s} (try --help)")),
             _ => opts.files.push(PathBuf::from(a)),
         }
     }
-    if let Some(cmd) = sink {
+    let rate = mpg123.rate;
+    opts.decoding = match decoder.as_str() {
+        "auto" => Decoding::prefer_mpg123(mpg123),
+        "mpg123" => Decoding::Mpg123(mpg123),
+        "builtin" | "built-in" => Decoding::Builtin { rate },
+        other => return Err(format!("--decoder takes auto, mpg123 or builtin, not {other}")),
+    };
+    opts.sink = if let Some(cmd) = sink {
         let mut words = cmd.split_whitespace().map(String::from);
         let program = words.next().ok_or("--sink needs a command")?;
-        opts.sink = SinkCommand { program, args: words.collect() };
+        Output::Command(SinkCommand { program, args: words.collect() })
+    } else if let Some(d) = dsp {
+        Output::Oss(d)
     } else if let Some(o) = output {
-        opts.sink = SinkCommand::out123(&["-o".into(), o], opts.mpg123.rate);
+        Output::Command(SinkCommand::out123(&["-o".into(), o], rate))
     } else {
-        opts.sink = SinkCommand::out123(&[], opts.mpg123.rate);
-    }
+        Output::choose(rate)
+    };
     Ok(opts)
 }
 
