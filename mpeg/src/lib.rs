@@ -1,5 +1,7 @@
 //! An MPEG-1/2/2.5 audio decoder, Layers I, II and III: minimp3 ported to
-//! safe Rust (CC0; see `third_party/minimp3/`), without its SIMD paths.
+//! safe Rust (CC0; see phonolite's `third_party/minimp3/`), without its
+//! SIMD paths. Built for speed (opt-level 3) by the workspace, while the
+//! player around it is built for size.
 //!
 //! Function names follow the C so the two can be read side by side.
 //! Where the C relies on buffers having slack past their end, reads here
@@ -8,6 +10,8 @@
 //! a panic. One addition: [`Decoder::eq`], a gain per channel and subband
 //! applied before synthesis — mpg123's equalizer, done the same way.
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs, rust_2018_idioms)]
 // The port follows the C line by line so the two can be compared; index
 // loops and the C's float literals stay as they are.
 #![allow(clippy::needless_range_loop, clippy::excessive_precision)]
@@ -1225,7 +1229,7 @@ pub struct Decoder {
     reserv_buf: [u8; MAX_BITRESERVOIR_BYTES],
     scratch: Scratch,
     /// Gains per channel and subband, applied before synthesis (`None`:
-    /// flat). See [`crate::eq`].
+    /// flat).
     pub eq: Option<[[f32; 32]; 2]>,
 }
 
@@ -1428,5 +1432,31 @@ pub fn header_facts(h: &[u8]) -> Option<(usize, usize, u32, u32)> {
     Some((hdr_frame_bytes(h, 0) + hdr_padding(h), hdr_frame_samples(h), hdr_sample_rate_hz(h), hdr_bitrate_kbps(h)))
 }
 
+/// Decode a whole in-memory stream: all its PCM (interleaved) and the
+/// last frame's description.
+pub fn decode_all(data: &[u8]) -> (Vec<i16>, FrameInfo) {
+    let mut d = Decoder::new();
+    let mut pcm = vec![0i16; MAX_SAMPLES_PER_FRAME];
+    let mut out = Vec::new();
+    let mut at = 0;
+    let mut last = FrameInfo::default();
+    while at < data.len() {
+        let mut info = FrameInfo::default();
+        let n = d.decode_frame(&data[at..], Some(&mut pcm), &mut info);
+        if info.frame_bytes == 0 {
+            break;
+        }
+        out.extend_from_slice(&pcm[..n * info.channels]);
+        at += info.frame_bytes;
+        if n > 0 {
+            last = info;
+        }
+    }
+    (out, last)
+}
+
+#[doc(hidden)]
+pub mod testsignal;
+
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;

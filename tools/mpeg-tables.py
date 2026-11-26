@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Regenerate src/mpeg/tables.rs from minimp3.h (CC0; see third_party/minimp3).
+"""Regenerate mpeg/src/tables.rs from minimp3.h (CC0; see third_party/minimp3).
 
-    python3 tools/mpeg-tables.py path/to/minimp3.h > src/mpeg/tables.rs
+    python3 tools/mpeg-tables.py path/to/minimp3.h > mpeg/src/tables.rs
 
 Tables are copied as written in the C source, never retyped; arrays the C
 pads with zeros are padded here; g_deq_L12, which the C builds with a macro

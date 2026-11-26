@@ -7,7 +7,8 @@ purpose; doc comments and `README.md` say *what* it is.
 
 1. **One dependency: protolith.** It draws, takes input, and provides the
    widgets. Decoding is mpg123's when it is installed, else the built-in
-   decoder's (`src/mpeg/`, minimp3 ported); everything else (inflate,
+   decoder's (`mpeg/`, the `phonolite-mpeg` crate: minimp3 ported, built
+   for speed); everything else (inflate,
    ZIP, FFT, M3U/PLS) is here in std-only Rust. **`unsafe` lives only in
    `src/oss.rs`** — libc's `ioctl` with the OSS requests that take one
    `int`, because setting a sound device's format has no safe route. The
@@ -31,17 +32,18 @@ purpose; doc comments and `README.md` say *what* it is.
 6. **No copied skin art.** The built-in skin is generated in code. A
    user's classic skin (e.g. `~/Downloads/base-2.91.wsz`) is reference
    material for checking layouts: never commit it or anything extracted
-   from it. Test fixtures are generated (`tools/fixtures.py`, `testsignal`).
+   from it. Test fixtures are generated (`tools/fixtures.py`, `tools/mpeg-*`,
+   `testsignal`).
 
 ## The gate (run before every commit)
 
 ```sh
-cargo fmt --check
-RUSTFLAGS="-D warnings" cargo clippy --all-targets
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-PHONOLITE_REQUIRE_MPG123=1 PHONOLITE_REQUIRE_XVFB=1 cargo test
-PHONOLITE_REQUIRE_MPG123=1 PHONOLITE_REQUIRE_XVFB=1 cargo +1.75 test
-for i in $(seq 1 10); do cargo test -q -- --test-threads=16 || break; done
+cargo fmt --all --check
+RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+PHONOLITE_REQUIRE_MPG123=1 PHONOLITE_REQUIRE_XVFB=1 cargo test --workspace
+PHONOLITE_REQUIRE_MPG123=1 PHONOLITE_REQUIRE_XVFB=1 cargo +1.75 test --workspace
+for i in $(seq 1 10); do cargo test -q --workspace -- --test-threads=16 || break; done
 tools/build-i486.sh    # the target build, and its size budget
 ```
 
@@ -60,7 +62,7 @@ real time, and races show only under load. Needs `mpg123` (which brings
    container; within 1 LSB, aligned for the LAME Info frame), corrupt
    input never panics. The player's playback tests run on both decoders.
 3. Real processes: mpg123 decoding generated MPEG-1 Layer I tones
-   (`src/testsignal.rs` — a tone per subband is a known frequency), into
+   (`mpeg/src/testsignal.rs` — a tone per subband is a known frequency), into
    `out123 -O file` (to measure what came out) or `out123 -o sleep`
    (real-time output with no sound card).
 4. Panes with synthetic protolith events (`WindowId::from_xid`).

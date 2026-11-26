@@ -35,6 +35,10 @@ First version: a classic-skinned mpg123 frontend on protolith.
   the server. Measured: 1.65 % of a core at 30 fps, 0.95 % at
   `--rate 22050 --fps 10`.
 - Settings and playlist kept in `$XDG_CONFIG_HOME/phonolite`.
+- **The decoder is its own crate**, `phonolite-mpeg` (`mpeg/`), built at
+  opt-level 3 while the rest stays at "z": 406x real time on 320 kbit/s
+  stereo, from 283x, for 12 KB on the i486 build. `cargo run --release -p
+  phonolite-mpeg --example bench -- FILE` measures it.
 - **A built-in decoder** for when mpg123 is not installed (`--decoder
   auto`, the default, prefers mpg123): MPEG-1/2/2.5 Layers I–III, minimp3
   ported to safe Rust (CC0), its tables extracted by script. Within one

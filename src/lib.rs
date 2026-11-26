@@ -23,6 +23,10 @@
 #![deny(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms, unreachable_pub)]
 
+pub use phonolite_mpeg as mpeg;
+#[doc(hidden)]
+pub use phonolite_mpeg::testsignal;
+
 pub mod app;
 pub mod audio;
 pub mod builtin;
@@ -30,14 +34,11 @@ pub mod config;
 pub mod engine;
 pub mod eq;
 pub mod inflate;
-pub mod mpeg;
 pub mod num;
 pub mod oss;
 pub mod player;
 pub mod playlist;
 pub mod remote;
 pub mod skin;
-#[doc(hidden)]
-pub mod testsignal;
 pub mod vis;
 pub mod zip;

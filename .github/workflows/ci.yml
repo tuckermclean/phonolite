@@ -29,11 +29,11 @@ jobs:
           components: rustfmt, clippy
       - working-directory: phonolite
         run: |
-          cargo fmt --check
-          RUSTFLAGS="-D warnings" cargo clippy --all-targets
-          RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
-          cargo test
-          for i in $(seq 1 10); do cargo test -q -- --test-threads=16 || exit 1; done
+          cargo fmt --all --check
+          RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+          cargo test --workspace
+          for i in $(seq 1 10); do cargo test -q --workspace -- --test-threads=16 || exit 1; done
 
   # The build that matters: a Pentium, stretching to a 486DX2. Built the way
   # Stele is built, in the same pinned image (the i486 musl cross toolchain

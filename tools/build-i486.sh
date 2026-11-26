@@ -34,9 +34,10 @@ CARGO_PROFILE_RELEASE_STRIP="$STRIP" CARGO_TARGET_DIR=target-i486 cargo +nightly
 bin=target-i486/i486-monolith-linux-musl/release/phonolite
 ls -l "$bin"
 # The budget (stripped). It was 570 KB before the size pass that set it at
-# 440 KB; the built-in MPEG decoder and OSS output (45 KB) raised it to 480 KB;
+# 440 KB; the built-in MPEG decoder and OSS output (45 KB) raised it to 480 KB,
+# building the decoder for speed (opt-level 3: 40% faster, 12 KB) to 500 KB;
 # raise it only with a reason in the commit.
-budget=480000
+budget=500000
 size=$(wc -c < "$bin")
 if [ "$STRIP" = true ] && [ "$size" -gt "$budget" ]; then
     echo "phonolite is $size bytes, over the $budget-byte budget" >&2

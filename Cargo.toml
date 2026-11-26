@@ -14,10 +14,14 @@ keywords = ["mp3", "player", "mpg123", "skin", "x11"]
 categories = ["multimedia::audio", "gui"]
 
 # One dependency, by design: protolith for pixels, windows, input and
-# widgets. Audio is mpg123's job (a separate program); everything else
+# widgets (plus phonolite-mpeg, the decoder, which lives in this repository). Audio is mpg123's job (a separate program); everything else
 # (inflate, ZIP, FFT) is here in std-only Rust.
 [dependencies]
+phonolite-mpeg = { path = "mpeg" }
 protolith = { path = "../protolith", default-features = false, features = ["x11", "bmp", "ui", "font-terminus-12"] }
+
+[workspace]
+members = ["mpeg"]
 
 [profile.release]
 opt-level = "z"
@@ -25,3 +29,8 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# The decoder is the hot loop: built for speed (30% faster than at "z"),
+# the rest for size.
+[profile.release.package.phonolite-mpeg]
+opt-level = 3

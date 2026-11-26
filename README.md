@@ -55,7 +55,7 @@ mpg123 -R ─────┐                               ┌──▶ out123 �
 ```
 
 **Decoding.** mpg123 when it runs (`--decoder auto`, the default), else the
-built-in decoder (`src/mpeg/`): MPEG-1/2/2.5 Layers I, II and III, a port
+built-in decoder (the `phonolite-mpeg` crate in `mpeg/`): MPEG-1/2/2.5 Layers I, II and III, a port
 to safe Rust of [minimp3](https://github.com/lieff/minimp3) (public domain,
 CC0; `third_party/minimp3/`). On every test file — LAME and ffmpeg encodes
 at MPEG-1/2/2.5, mono, stereo, joint stereo, CBR and VBR, Layers II and III
@@ -94,9 +94,10 @@ built the same way, is 58 KB (KB here: 1000 bytes). CI holds it under a
 the unwinder (nothing unwinds), std's float formatting and parsing, libm,
 and libc's DNS resolver (via protolith).
 
-The built-in decoder decodes 320 kbit/s stereo at 283× real time on one
-modern core as built (`opt-level = "z"`), 405× at `opt-level = 3` — the
-same as mpg123's portable C path (mpg123 with AVX: 2× faster). On a 486
+The built-in decoder (its own crate, built at `opt-level = 3` while the
+rest is built for size) decodes 320 kbit/s stereo at 406× real time on one
+modern core — the same as mpg123's portable C path (mpg123 with AVX: 2×
+faster). On a 486
 mpg123's hand-tuned x86 code will be faster still; the built-in decoder is
 for when mpg123 is not there. Its speed on a real 486 is unmeasured.
 

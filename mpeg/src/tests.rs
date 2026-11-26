@@ -1,30 +1,18 @@
 use super::*;
-use crate::engine::tests::have_mpg123;
 
-fn fixture(name: &str) -> Vec<u8> {
-    std::fs::read(format!("{}/tests/data/mpeg/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+fn have_mpg123() -> bool {
+    let ok = std::process::Command::new("mpg123")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    assert!(ok || std::env::var_os("PHONOLITE_REQUIRE_MPG123").is_none(), "PHONOLITE_REQUIRE_MPG123 is set but mpg123 cannot be run");
+    ok
 }
 
-/// All the PCM in a stream, frame by frame, and the last frame's info.
-pub(crate) fn decode_all(data: &[u8]) -> (Vec<i16>, FrameInfo) {
-    let mut d = Decoder::new();
-    let mut pcm = vec![0i16; MAX_SAMPLES_PER_FRAME];
-    let mut out = Vec::new();
-    let mut at = 0;
-    let mut last = FrameInfo::default();
-    while at < data.len() {
-        let mut info = FrameInfo::default();
-        let n = d.decode_frame(&data[at..], Some(&mut pcm), &mut info);
-        if info.frame_bytes == 0 {
-            break;
-        }
-        out.extend_from_slice(&pcm[..n * info.channels]);
-        at += info.frame_bytes;
-        if n > 0 {
-            last = info;
-        }
-    }
-    (out, last)
+fn fixture(name: &str) -> Vec<u8> {
+    std::fs::read(format!("{}/../tests/data/mpeg/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
 }
 
 const FIXTURES: [&str; 12] = [
@@ -51,7 +39,7 @@ fn matches_mpg123_on_every_fixture() {
         return;
     }
     for name in FIXTURES {
-        let path = format!("{}/tests/data/mpeg/{name}", env!("CARGO_MANIFEST_DIR"));
+        let path = format!("{}/../tests/data/mpeg/{name}", env!("CARGO_MANIFEST_DIR"));
         let reference: Vec<i16> = std::process::Command::new("mpg123")
             .args(["-q", "-s", "-e", "s16", "--no-gapless"])
             .arg(&path)

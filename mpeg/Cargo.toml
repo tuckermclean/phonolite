@@ -1,0 +1,15 @@
+[package]
+name = "phonolite-mpeg"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "An MPEG-1/2/2.5 audio decoder (Layers I–III) in safe Rust: minimp3 ported, for phonolite."
+repository = "https://github.com/tuckermclean/phonolite"
+# Ported from minimp3, which is public domain (CC0 1.0; ../third_party/minimp3/).
+license = "MIT OR Apache-2.0"
+keywords = ["mp3", "mpeg", "audio", "decoder"]
+categories = ["multimedia::audio", "multimedia::encoding"]
+
+# No dependencies. A crate of its own so it can be built for speed
+# (opt-level 3, set in the workspace root) while phonolite is built for size.
+[dependencies]

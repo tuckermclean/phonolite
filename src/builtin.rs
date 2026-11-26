@@ -596,7 +596,7 @@ mod tests {
         // No resampling, stereo file: exactly what mpeg::decode_all gives,
         // minus the Info frame.
         let (_, pcm) = run(&fixture("l3-128-stereo.mp3"), 0.0, 44100);
-        let (raw, _) = crate::mpeg::tests::decode_all(&std::fs::read(fixture("l3-128-stereo.mp3")).unwrap());
+        let (raw, _) = crate::mpeg::decode_all(&std::fs::read(fixture("l3-128-stereo.mp3")).unwrap());
         assert_eq!(pcm[..], raw[2 * 1152..2 * 1152 + pcm.len()]);
     }
 
@@ -607,7 +607,7 @@ mod tests {
         assert!(pcm.chunks(2).all(|f| f[0] == f[1]), "mono doubled");
         let (_, pcm) = run(&fixture("l3-mpeg25-8k.mp3"), 0.0, 44100);
         // Every 8 kHz sample the decoder gives becomes 44100/8000 of them.
-        let (raw, _) = crate::mpeg::tests::decode_all(&std::fs::read(fixture("l3-mpeg25-8k.mp3")).unwrap());
+        let (raw, _) = crate::mpeg::decode_all(&std::fs::read(fixture("l3-mpeg25-8k.mp3")).unwrap());
         let want = raw.len() as f64 * 44100.0 / 8000.0;
         let frames = pcm.len() / 2;
         assert!((frames as f64 - want).abs() <= 2.0, "{frames} vs {want}");

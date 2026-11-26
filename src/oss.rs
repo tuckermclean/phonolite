@@ -235,6 +235,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         walk(&root.join("src"), &mut files);
         walk(&root.join("tests"), &mut files);
+        walk(&root.join("mpeg/src"), &mut files);
         assert!(files.len() > 20);
         for f in files {
             if f.ends_with("src/oss.rs") {

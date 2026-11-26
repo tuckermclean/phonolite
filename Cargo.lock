@@ -6,8 +6,13 @@ version = 3
 name = "phonolite"
 version = "0.1.0"
 dependencies = [
+ "phonolite-mpeg",
  "protolith",
 ]
+
+[[package]]
+name = "phonolite-mpeg"
+version = "0.1.0"
 
 [[package]]
 name = "protolith"
