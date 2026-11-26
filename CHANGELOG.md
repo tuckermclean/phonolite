@@ -42,6 +42,12 @@ First version: a classic-skinned mpg123 frontend on protolith.
   noise, never a panic. ID3v1/v2 tags, LAME/Xing length and seek table,
   linear resampling, the equalizer in its subbands. The playback tests run
   on both decoders.
+- **An output that fails hands over to the next** (from what was last
+  heard), so one broken route — say `aplay` whose default ALSA device
+  will not open — no longer means silence; when none works, the error
+  lists each one's reason. Messages also go to stderr in full (the title
+  shows a few seconds of a scrolling fragment). A sound server is also
+  recognized by `$PULSE_SERVER`.
 - **More ways out**: `pacat` (PulseAudio, PipeWire's Pulse layer) and
   `aplay` (alsa-utils) as sinks, found on `PATH`; mixing outputs before
   the exclusive `/dev/dsp`; with nothing to play through, the error says

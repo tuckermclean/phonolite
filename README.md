@@ -69,8 +69,10 @@ just as mpg123 does. It plays files; streams (`http://…`) need mpg123.
 All of them mix with other programs — through the server, or alsa-lib's
 dmix where it is configured — so they come before `/dev/dsp`, which is
 exclusive (dmix lives in alsa-lib, and OSS bypasses it): the last resort,
-and the way on a bare machine. `--dsp`, `-o` and `--sink` choose
-explicitly. PipeWire's own `pw-cat` is not used: it reads only files with
+and the way on a bare machine. If one fails — `aplay` that cannot open
+its device, a server that refuses — phonolite says why on stderr and goes
+on through the next, from what was last heard; if none works, the error
+lists what each said. `--dsp`, `-o` and `--sink` choose explicitly. PipeWire's own `pw-cat` is not used: it reads only files with
 a header, not a raw stream; its Pulse layer serves `pacat`.
 
 One decoder, one pass over the samples: the visualizer reads the samples

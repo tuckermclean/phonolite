@@ -41,8 +41,8 @@ pub struct Options {
     pub skin: Option<PathBuf>,
     /// What decodes: mpg123 or the built-in decoder.
     pub decoding: Decoding,
-    /// Where the sound goes.
-    pub sink: Output,
+    /// Where the sound may go, tried in order.
+    pub outputs: Vec<Output>,
     /// Animation frames per second while playing.
     pub fps: u32,
     /// Files, folders, playlists or URLs to play (replacing the saved
@@ -138,7 +138,7 @@ impl App {
                 let _ = w.wake();
             }
         });
-        let mut player = Player::new(opts.decoding.clone(), opts.sink.clone(), notify);
+        let mut player = Player::new(opts.decoding.clone(), opts.outputs.clone(), notify);
         player.set_volume(cfg.volume);
         player.set_balance(cfg.balance);
         let _ = player.set_equalizer(cfg.eq.clone());
@@ -298,8 +298,12 @@ impl App {
         self.pl.set_rows(rows);
     }
 
+    /// Show a message in the title for a few seconds, and in full on
+    /// stderr (the title has room for little, and scrolls away).
     fn say(&mut self, text: impl Into<String>) {
-        self.message = Some((text.into(), Instant::now()));
+        let text = text.into();
+        eprintln!("phonolite: {text}");
+        self.message = Some((text, Instant::now()));
     }
 
     // ------------------------------------------------------------ playing

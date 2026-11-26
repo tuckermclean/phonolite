@@ -44,7 +44,7 @@ fn parse() -> Result<Options, String> {
     let mut opts = Options {
         skin: None,
         decoding: Decoding::Builtin { rate: phonolite::audio::RATE },
-        sink: Output::Oss("/dev/dsp".into()),
+        outputs: Vec::new(),
         fps: 30,
         files: Vec::new(),
         config_dir: phonolite::config::dir(),
@@ -85,14 +85,14 @@ fn parse() -> Result<Options, String> {
         "builtin" | "built-in" => Decoding::Builtin { rate },
         other => return Err(format!("--decoder takes auto, mpg123 or builtin, not {other}")),
     };
-    opts.sink = if let Some(cmd) = sink {
+    opts.outputs = if let Some(cmd) = sink {
         let mut words = cmd.split_whitespace().map(String::from);
         let program = words.next().ok_or("--sink needs a command")?;
-        Output::Command(SinkCommand { program, args: words.collect() })
+        vec![Output::Command(SinkCommand { program, args: words.collect() })]
     } else if let Some(d) = dsp {
-        Output::Oss(d)
+        vec![Output::Oss(d)]
     } else if let Some(o) = output {
-        Output::Command(SinkCommand::out123(&["-o".into(), o], rate))
+        vec![Output::Command(SinkCommand::out123(&["-o".into(), o], rate))]
     } else {
         Output::choose(rate)
     };

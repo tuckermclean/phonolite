@@ -72,7 +72,7 @@ fn app(x: &Xvfb, files: Vec<PathBuf>) -> App {
     let opts = Options {
         skin: None,
         decoding: Decoding::Mpg123(Mpg123::default()),
-        sink: SinkCommand::out123(&["-o".into(), "sleep".into()], 44100).into(),
+        outputs: vec![phonolite::player::Output::Command(SinkCommand::out123(&["-o".into(), "sleep".into()], 44100))],
         fps: 30,
         files,
         config_dir: None,
@@ -210,7 +210,7 @@ fn region_txt_shapes_the_window() {
     let opts = Options {
         skin: Some(dir.clone()),
         decoding: Decoding::Mpg123(Mpg123::default()),
-        sink: SinkCommand::out123(&[], 44100).into(),
+        outputs: vec![phonolite::player::Output::Command(SinkCommand::out123(&[], 44100))],
         fps: 30,
         files: Vec::new(),
         config_dir: None,

@@ -216,17 +216,50 @@ pub enum Output {
 }
 
 impl Output {
-    /// Look at what this machine has and [`pick`](Output::pick).
-    pub fn choose(rate: u32) -> Output {
+    /// A short name for messages: the program, or the device.
+    pub fn name(&self) -> String {
+        match self {
+            Output::Command(c) => c.program.clone(),
+            Output::Oss(p) => p.display().to_string(),
+        }
+    }
+
+    /// Everything this machine might play through, best first (see
+    /// [`candidates`](Output::candidates)).
+    pub fn choose(rate: u32) -> Vec<Output> {
         let runtime = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from);
         let path = std::env::var_os("PATH").unwrap_or_default();
         let found = Found {
-            sound_server: runtime.is_some_and(|d| d.join("pulse/native").exists() || d.join("pipewire-0").exists()),
+            sound_server: std::env::var_os("PULSE_SERVER").is_some_and(|s| !s.is_empty())
+                || runtime.is_some_and(|d| d.join("pulse/native").exists() || d.join("pipewire-0").exists()),
             out123: on_path("out123", &path),
             pacat: on_path("pacat", &path),
             aplay: on_path("aplay", &path),
         };
-        Output::pick(&found, rate)
+        Output::candidates(&found, rate)
+    }
+
+    /// What to try, in order: [`pick`](Output::pick)'s order, every one
+    /// that is installed, ending with `/dev/dsp`. When one fails (aplay
+    /// that cannot open its device, a server that refuses), the player
+    /// moves on to the next.
+    pub fn candidates(f: &Found, rate: u32) -> Vec<Output> {
+        let mut out = Vec::new();
+        if f.out123 {
+            out.push(Output::Command(SinkCommand::out123(&[], rate)));
+        }
+        if f.sound_server && f.pacat {
+            out.push(Output::Command(SinkCommand::pacat(rate)));
+        }
+        if f.aplay {
+            out.push(Output::Command(SinkCommand::aplay(rate)));
+        }
+        if !f.sound_server && f.pacat {
+            // A server may still answer (PULSE_SERVER on another host).
+            out.push(Output::Command(SinkCommand::pacat(rate)));
+        }
+        out.push(Output::Oss("/dev/dsp".into()));
+        out
     }
 
     /// The first that is there: out123; pacat, if a sound server runs;
@@ -251,6 +284,18 @@ impl Output {
 impl From<SinkCommand> for Output {
     fn from(c: SinkCommand) -> Output {
         Output::Command(c)
+    }
+}
+
+impl From<Output> for Vec<Output> {
+    fn from(o: Output) -> Vec<Output> {
+        vec![o]
+    }
+}
+
+impl From<SinkCommand> for Vec<Output> {
+    fn from(c: SinkCommand) -> Vec<Output> {
+        vec![Output::Command(c)]
     }
 }
 
@@ -293,7 +338,7 @@ impl SinkHandle {
 
     fn complaint(&self) -> String {
         match self {
-            SinkHandle::Process(p) => p.stderr.lock().unwrap().clone(),
+            SinkHandle::Process(p) => p.last_words(),
             SinkHandle::Oss(_) => String::new(),
         }
     }
@@ -302,6 +347,8 @@ impl SinkHandle {
 struct SinkProcess {
     child: Option<Child>,
     stderr: Arc<Mutex<String>>,
+    /// Its stderr has been read to the end.
+    stderr_done: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SinkProcess {
@@ -315,17 +362,30 @@ impl SinkProcess {
             .map_err(|e| io::Error::new(e.kind(), format!("cannot run {}: {e}", cmd.program)))?;
         let stdin = child.stdin.take().expect("piped");
         let stderr = Arc::new(Mutex::new(String::new()));
+        let stderr_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         if let Some(pipe) = child.stderr.take() {
-            let tail = stderr.clone();
+            let (tail, done) = (stderr.clone(), stderr_done.clone());
             thread::spawn(move || {
                 for line in BufReader::new(pipe).lines().map_while(Result::ok) {
                     if !line.trim().is_empty() {
                         *tail.lock().unwrap() = line.trim().to_string();
                     }
                 }
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
             });
         }
-        Ok((SinkProcess { child: Some(child), stderr }, stdin))
+        Ok((SinkProcess { child: Some(child), stderr, stderr_done }, stdin))
+    }
+
+    /// Why it stopped: its last word on stderr. A program that died has
+    /// usually said why just before, but the write that found it gone can
+    /// come first — so give its stderr a moment to arrive.
+    fn last_words(&self) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(300);
+        while !self.stderr_done.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            thread::sleep(std::time::Duration::from_millis(5));
+        }
+        self.stderr.lock().unwrap().clone()
     }
 
     /// Let it play out what it holds and exit (once the pump has closed
@@ -431,7 +491,11 @@ struct Segment {
 /// The player.
 pub struct Player {
     decoding: Decoding,
-    output: Output,
+    outputs: Vec<Output>,
+    /// The output in use: where the search got to (it stays there).
+    out_at: usize,
+    /// Why each output tried so far failed, for when none is left.
+    failures: Vec<String>,
     notify: Arc<dyn Fn() + Send + Sync>,
     audio: Audio,
     sink: Option<SinkHandle>,
@@ -446,12 +510,23 @@ pub struct Player {
 
 impl Player {
     /// A player; processes start on first use.
-    pub fn new(decoding: Decoding, output: impl Into<Output>, notify: Arc<dyn Fn() + Send + Sync>) -> Player {
+    /// A player; processes start on first use. `outputs` are tried in
+    /// order until one plays.
+    pub fn new(decoding: Decoding, outputs: impl Into<Vec<Output>>, notify: Arc<dyn Fn() + Send + Sync>) -> Player {
         let n = notify.clone();
         let audio = Audio::new(decoding.rate(), Box::new(move || n()));
         let mut p = Player {
             decoding,
-            output: output.into(),
+            outputs: {
+                let o: Vec<Output> = outputs.into();
+                if o.is_empty() {
+                    vec![Output::Oss("/dev/dsp".into())]
+                } else {
+                    o
+                }
+            },
+            out_at: 0,
+            failures: Vec::new(),
             notify,
             audio,
             sink: None,
@@ -477,8 +552,41 @@ impl Player {
         self.audio.set_gain(l, r);
     }
 
+    /// Open the current output, or the next that opens.
+    fn open_output(&mut self) -> io::Result<(SinkHandle, crate::audio::Sink)> {
+        loop {
+            match SinkHandle::open(&self.outputs[self.out_at], self.decoding.rate()) {
+                Ok(x) => return Ok(x),
+                Err(e) => {
+                    self.failures.push(format!("{}: {e}", self.outputs[self.out_at].name()));
+                    if !self.next_output() {
+                        return Err(io::Error::new(e.kind(), self.nothing_played()));
+                    }
+                }
+            }
+        }
+    }
+
+    fn next_output(&mut self) -> bool {
+        if self.out_at + 1 < self.outputs.len() {
+            self.out_at += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn nothing_played(&self) -> String {
+        format!("no audio output works — {}", self.failures.join("; "))
+    }
+
+    /// The output in use (or about to be tried).
+    pub fn output(&self) -> &Output {
+        &self.outputs[self.out_at]
+    }
+
     fn start_sink(&mut self) -> io::Result<()> {
-        let (handle, writer) = SinkHandle::open(&self.output, self.decoding.rate())?;
+        let (handle, writer) = self.open_output()?;
         self.sink = Some(handle);
         self.audio.set_sink(writer);
         Ok(())
@@ -576,7 +684,7 @@ impl Player {
                 self.status = Status::Paused;
             }
             Status::Paused => {
-                let (handle, writer) = SinkHandle::open(&self.output, self.decoding.rate())?;
+                let (handle, writer) = self.open_output()?;
                 self.sink = Some(handle);
                 self.audio.resume(writer);
                 self.status = Status::Playing;
@@ -762,11 +870,31 @@ impl Player {
 
         let snap = self.audio.snapshot();
         if snap.sink_failed && self.status == Status::Playing {
-            let why = self.sink.as_ref().map(SinkHandle::complaint).unwrap_or_default();
-            out.push(Update::Error(if why.is_empty() { "the audio output stopped".into() } else { format!("audio output: {why}") }));
-            self.stop();
-            push(&mut out, Update::Status);
-            return out;
+            // It died (aplay that could not open its device, a server that
+            // went away): note why, and carry on through the next output,
+            // from what was last heard.
+            let mut why = self.sink.as_ref().map(SinkHandle::complaint).unwrap_or_default();
+            if why.is_empty() {
+                why = "stopped".into();
+            }
+            let failed = self.outputs[self.out_at].name();
+            self.failures.push(format!("{failed}: {why}"));
+            self.audio.pause();
+            self.sink = None;
+            let reopened = if self.next_output() { self.open_output() } else { Err(io::Error::new(io::ErrorKind::NotFound, self.nothing_played())) };
+            match reopened {
+                Ok((handle, writer)) => {
+                    self.sink = Some(handle);
+                    self.audio.resume(writer);
+                    out.push(Update::Error(format!("{failed} failed ({why}); playing through {} instead", self.output().name())));
+                }
+                Err(e) => {
+                    out.push(Update::Error(e.to_string()));
+                    self.stop();
+                    push(&mut out, Update::Status);
+                    return out;
+                }
+            }
         }
         if let Some(i) = self.audible_index(&snap) {
             let (id, tag) = (self.segments[i].id, self.segments[i].tag);
@@ -903,6 +1031,53 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn candidates_in_order_always_ending_with_the_device() {
+        let f = |sound_server, out123, pacat, aplay| Found { sound_server, out123, pacat, aplay };
+        let names = |c: Vec<Output>| c.iter().map(Output::name).collect::<Vec<_>>();
+        assert_eq!(names(Output::candidates(&f(true, true, true, true), 44100)), ["out123", "pacat", "aplay", "/dev/dsp"]);
+        assert_eq!(names(Output::candidates(&f(false, false, true, true), 44100)), ["aplay", "pacat", "/dev/dsp"], "no server found: pacat after aplay");
+        assert_eq!(names(Output::candidates(&f(false, false, false, false), 44100)), ["/dev/dsp"]);
+    }
+
+    /// An output that dies at once (as aplay does when it cannot open its
+    /// device) hands over to the next, and the music plays there.
+    #[test]
+    fn a_failing_output_hands_over_to_the_next() {
+        if !have_mpg123() {
+            return;
+        }
+        let d = scratch("player-fallback");
+        let a = write_tone(&d, "a.mp3", "T", 2, 0.5);
+        let out = d.join("out.raw");
+        // `sh -c 'echo …; exit 1'` stands in for aplay failing to open.
+        let broken =
+            SinkCommand { program: "sh".into(), args: vec!["-c".into(), "echo 'main:850: audio open error: No such file or directory' >&2; exit 1".into()] };
+        let outputs = vec![Output::Oss("/nonexistent/dsp".into()), Output::Command(broken), Output::Command(file_sink(&out))];
+        let mut p = Player::new(Decoding::Builtin { rate: 48000 }, outputs, Arc::new(|| {}));
+        p.play(&a, 1).unwrap();
+        assert_eq!(p.output().name(), "sh", "the missing device was skipped at once");
+        let seen = run_until(&mut p, "the end", |p, _| p.status() == Status::Stopped);
+        let errors: Vec<&String> = seen.iter().filter_map(|u| if let Update::Error(e) = u { Some(e) } else { None }).collect();
+        assert!(errors.iter().any(|e| e.contains("sh failed (main:850: audio open error") && e.contains("playing through out123 instead")), "{errors:?}");
+        assert!(seen.contains(&Update::Ended));
+        drop(p);
+        let frames = settled(&out).len() / 4;
+        assert!(frames >= 24000 - 2400, "all but a moment of the half second: {frames}");
+    }
+
+    #[test]
+    fn when_no_output_works_it_says_what_each_said() {
+        let d = scratch("player-nooutput");
+        let a = write_tone(&d, "a.mp3", "T", 2, 0.3);
+        let broken = |msg: &str| Output::Command(SinkCommand { program: "sh".into(), args: vec!["-c".into(), format!("echo '{msg}' >&2; exit 1")] });
+        let mut p = Player::new(Decoding::Builtin { rate: 48000 }, vec![broken("first: busy"), broken("second: refused")], Arc::new(|| {}));
+        p.play(&a, 1).unwrap();
+        let seen = run_until(&mut p, "giving up", |p, _| p.status() == Status::Stopped);
+        let last = seen.iter().rev().find_map(|u| if let Update::Error(e) = u { Some(e.clone()) } else { None }).unwrap();
+        assert!(last.contains("no audio output works") && last.contains("first: busy") && last.contains("second: refused"), "{last}");
+    }
+
+    #[test]
     fn programs_are_found_on_path() {
         use std::os::unix::fs::PermissionsExt;
         let d = scratch("on-path");
@@ -928,7 +1103,7 @@ pub(crate) mod tests {
         // With no device and nothing else, the failure says what to do.
         let mut pl = Player::new(Decoding::Builtin { rate: 44100 }, Output::Oss("/nonexistent/dsp".into()), Arc::new(|| {}));
         let e = pl.play("/nonexistent/x.mp3", 1).unwrap_err().to_string();
-        assert!(e.contains("/nonexistent/dsp") && e.contains("alsa-utils") && e.contains("snd-pcm-oss"), "{e}");
+        assert!(e.contains("no audio output works") && e.contains("/nonexistent/dsp") && e.contains("alsa-utils") && e.contains("snd-pcm-oss"), "{e}");
     }
 
     #[test]
