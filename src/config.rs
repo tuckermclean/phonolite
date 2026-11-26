@@ -44,6 +44,8 @@ pub struct Config {
     pub last_dir: Option<String>,
     /// The current playlist entry.
     pub current: Option<usize>,
+    /// Where the main, equalizer and playlist windows were on the screen.
+    pub positions: [Option<(i32, i32)>; 3],
 }
 
 impl Default for Config {
@@ -65,6 +67,7 @@ impl Default for Config {
             skin: None,
             last_dir: None,
             current: None,
+            positions: [None; 3],
         }
     }
 }
@@ -76,6 +79,8 @@ pub fn dir() -> Option<PathBuf> {
     }
     std::env::var_os("HOME").filter(|h| !h.is_empty()).map(|h| PathBuf::from(h).join(".config/phonolite"))
 }
+
+const POSITION_KEYS: [&str; 3] = ["main_pos", "eq_pos", "pl_pos"];
 
 fn flag(b: bool) -> &'static str {
     if b {
@@ -121,6 +126,11 @@ impl Config {
         if let Some(c) = self.current {
             let _ = writeln!(s, "current={c}");
         }
+        for (key, pos) in POSITION_KEYS.iter().zip(self.positions) {
+            if let Some((x, y)) = pos {
+                let _ = writeln!(s, "{key}={x},{y}");
+            }
+        }
         s
     }
 
@@ -163,6 +173,10 @@ impl Config {
                 "skin" if !v.is_empty() => c.skin = Some(v.to_string()),
                 "last_dir" if !v.is_empty() => c.last_dir = Some(v.to_string()),
                 "current" => c.current = v.parse().ok(),
+                _ if POSITION_KEYS.contains(&k) => {
+                    let i = POSITION_KEYS.iter().position(|p| *p == k).expect("contained");
+                    c.positions[i] = v.split_once(',').and_then(|(x, y)| Some((x.trim().parse().ok()?, y.trim().parse().ok()?)));
+                }
                 _ => {}
             }
         }
@@ -206,11 +220,13 @@ mod tests {
             skin: Some("/skins/x y.wsz".into()),
             last_dir: Some("/music".into()),
             current: Some(7),
+            positions: [Some((10, -20)), None, Some((300, 400))],
         };
         assert_eq!(Config::from_text(&c.to_text()), c);
         assert_eq!(Config::from_text(""), Config::default());
-        let odd = Config::from_text("volume=900\nbalance=x\neq_bands=1,2\nnonsense\nvis=weird\n");
+        let odd = Config::from_text("volume=900\nbalance=x\neq_bands=1,2\nnonsense\nvis=weird\neq_pos=1,x\n");
         assert_eq!((odd.volume, odd.balance, odd.eq.bands, odd.vis), (100, 0, [0.0; 10], Mode::Spectrum));
+        assert_eq!(odd.positions, [None; 3]);
     }
 
     #[test]

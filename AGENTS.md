@@ -85,6 +85,17 @@ real time, and races show only under load. Needs `mpg123` (which brings
 - Without a window manager a newly mapped window takes the focus: a popup
   must not close on the main window's focus-out alone.
 - Terminus (the 191-glyph subset) has no `…` or `•`.
+- Xvfb resets when its last client disconnects: a test that reconnects
+  (a restart) must hold another connection open meanwhile.
+- Window placement: run `tools/check-windows.sh` after touching
+  `src/app/snap.rs` or how windows are created, moved or shown — Xvfb
+  tests have no window manager, and each real one differs. In it, give
+  the WM a few seconds to start (openbox's first start announces itself
+  long before it handles clicks), read positions with `xwininfo`
+  (`xdotool getwindowgeometry` counts a reparenting WM's title twice),
+  and kill what each run started (`timeout` alone leaves Xvfb behind).
+- `read_pixels` reads protolith's backing pixmap, so it works on unmapped
+  windows; ask the server (`GetWindowAttributes`) whether one is shown.
 - PulseAudio: protocol details come from its `native-common.h`,
   `tagstruct.c` and `protocol-native.c`; the fake server in `pulse.rs` only
   encodes our reading of them, so `tools/check-pulse.sh` (real PulseAudio

@@ -21,8 +21,7 @@ First version: a classic-skinned mpg123 frontend on protolith.
 - **Built-in skin**: every sheet generated in code (volcanic stone, mint
   LCD, amber lamps), including a 3x5 font for the whole text sheet and
   a 5x7 one, spaced and shadowed, for the window titles.
-- **Windows**: player, equalizer and playlist docked in one shaped,
-  borderless window, dragged as one; double size; always on top;
+- **Windows**: player, equalizer and playlist, docked; double size; always on top;
   minimize; popup menus (override-redirect); dialogs (file browser, skin
   picker, playlist load/save, URL, jump to file) from protolith widgets.
 - **Visualizer**: 19-bar spectrum (512-point FFT, falling bars, held
@@ -35,6 +34,28 @@ First version: a classic-skinned mpg123 frontend on protolith.
   the server. Measured: 1.65 % of a core at 30 fps, 0.95 % at
   `--rate 22050 --fps 10`.
 - Settings and playlist kept in `$XDG_CONFIG_HOME/phonolite`.
+- **Detachable windows that snap**: the player, equalizer and playlist
+  are three windows (the latter two transient for the player). Drag the
+  equalizer or playlist by its title bar to pull it off; an edge within
+  10 px of another window's (beside, above, below, or aligned with it) or
+  of the screen's snaps to it; the player carries whatever is docked to
+  it, transitively (`src/app/snap.rs`). phonolite moves the windows
+  itself, following the pointer — a window manager's move cannot snap to
+  the other windows. Positions are saved (`main_pos`, `eq_pos`,
+  `pl_pos`); a saved place off the current screen falls back to the
+  stack in the middle. Double size scales docked offsets; resizing the
+  playlist moves what is docked under it. For two seconds after a window
+  is mapped phonolite puts it back if the window manager placed it
+  elsewhere (openbox centers transient windows on their owner; Fluxbox
+  may ignore the position asked for). Tests: snapping and docking rules;
+  on Xvfb, pulling off, snapping beside, carrying, the screen edge,
+  double size, a restart, and a window moved by another client while
+  settling (put back) and after (left), against the server's idea of
+  where each window is. `tools/check-windows.sh` drives the real program
+  with a real pointer (xdotool) with no window manager and under twm,
+  openbox, IceWM, Fluxbox and xfwm4 in a container: 18 of 18 runs right.
+  It found two protolith bugs (positions were the frame's; resizing
+  dropped the position hint, which hung twm), fixed there.
 - **Its own PulseAudio client** (`src/pulse.rs`): the native protocol in
   safe Rust over the socket (`$PULSE_SERVER`, else
   `$XDG_RUNTIME_DIR/pulse/native`) — protocol 13, no shared memory, audio

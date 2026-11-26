@@ -23,10 +23,15 @@ install.
 
 ## What it does
 
-- **Three docked panes in one shaped, borderless window**: the player, the
-  10-band equalizer, and the resizable playlist — stacked as classic
-  players lay them out, dragged as one. Each can be hidden; double size
-  (Ctrl+D) scales it all; always on top (Ctrl+A); minimize.
+- **Three windows that snap together**: the player (shaped by the skin),
+  the 10-band equalizer and the resizable playlist, borderless, stacked
+  and docked at first. Drag the equalizer or playlist by its title bar to
+  pull it off; bring an edge within 10 pixels of another window's —
+  below, above or beside it — or of the screen's, and it snaps there.
+  Dragging the player carries every window docked to it, directly or
+  through another. Where they are is remembered. Each can be hidden;
+  double size (Ctrl+D) scales it all and keeps docked windows docked;
+  always on top (Ctrl+A); minimize.
 - **Classic skins**: `.wsz` archives (ZIP, read by phonolite's own inflate)
   or folders; any file a skin lacks comes from the built-in skin.
   `viscolor.txt`, `pledit.txt` (playlist colors) and `region.txt` (the
@@ -92,7 +97,7 @@ Tracks that run into each other are queued back to back with no gap.
 
 It is meant for a Pentium, with a 486DX2 as the stretch goal. Built for
 that (`tools/build-i486.sh`: 32-bit static musl for an i486, std rebuilt
-from source, panics aborting), phonolite is **501 KB**, of which the
+from source, panics aborting), phonolite is **505 KB**, of which the
 built-in decoder (built for speed) and direct OSS and PulseAudio output are
 about 78 KB; a program that does nothing, built the same way, is 58 KB (KB
 here: 1000 bytes). CI holds it under a 520 KB budget. A size pass found, and removed, 147 KB: unwind tables and
@@ -148,8 +153,9 @@ arrows, Enter and Delete act on it.
   together; changes are heard after the decoder's pipe (~0.4 s).
 - The playlist selects one entry at a time; no drag to reorder, no
   drag-and-drop from file managers.
-- The panes stay docked; the shade button hides the equalizer and playlist
-  rather than rolling the player up into window-shade mode.
+- The shade button hides the equalizer and playlist rather than rolling
+  them up into window-shade mode. Hiding a window leaves a gap; the ones
+  docked beyond it no longer follow the player until snapped back.
 - The playlist is drawn in Terminus, not the font `pledit.txt` names.
 - No mini-browser, video window, `gen.bmp` windows or skin cursors.
 - Displayed time and the visualizer follow what has been sent to the sink,

@@ -1,7 +1,12 @@
-//! The application: one borderless, shaped window holding the main,
-//! equalizer and playlist panes stacked (docked) as classic players lay
-//! them out, plus popup menus and dialog windows; the player and playlist
-//! behind them.
+//! The application: three borderless windows — the main window (shaped by
+//! the skin), the equalizer and the playlist — that snap together and to
+//! the screen's edges as classic players' do (see [`snap`]), plus popup
+//! menus and dialog windows; the player and playlist behind them.
+//!
+//! phonolite moves its windows itself, following the pointer, rather than
+//! handing the drag to the window manager: only it knows where its other
+//! windows are to snap to, and which are docked to the main window and
+//! must move with it.
 
 pub mod common;
 pub mod dialog;
@@ -9,6 +14,7 @@ pub mod eq_pane;
 pub mod main_pane;
 pub mod pl_pane;
 pub mod popup;
+pub mod snap;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -19,6 +25,7 @@ use protolith::ui::FieldStyle;
 use protolith::x11::shape::rects_from_mask;
 use protolith::x11::{Connection, Event, Key, MouseButton, WindowId, WindowOptions};
 use protolith::Rect;
+use snap::Bounds;
 
 use crate::config::Config;
 use crate::eq::{Equalizer, PRESETS};
@@ -52,11 +59,43 @@ pub struct Options {
     pub config_dir: Option<PathBuf>,
 }
 
+/// One of the three windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Pane {
+pub enum Pane {
+    /// The main window.
     Main,
+    /// The equalizer.
     Eq,
+    /// The playlist.
     Pl,
+}
+
+impl Pane {
+    /// All three, in order.
+    pub const ALL: [Pane; 3] = [Pane::Main, Pane::Eq, Pane::Pl];
+}
+
+/// A window and what it shows.
+struct Win {
+    id: WindowId,
+    /// The pane as last drawn, at 1x.
+    canvas: Canvas,
+    /// What the window shows now, at 1x.
+    shown: Canvas,
+    /// The scaled copy sent at double size.
+    scaled: Canvas,
+    /// Its top-left corner on the screen.
+    pos: (i32, i32),
+    /// Send all of it next frame.
+    full: bool,
+}
+
+/// A window being dragged, with what is docked to it.
+struct Drag {
+    /// Where the pointer was pressed (screen coordinates).
+    from: (i32, i32),
+    /// The windows moving, and where each started.
+    moving: Vec<(Pane, (i32, i32))>,
 }
 
 /// The running application.
@@ -65,6 +104,13 @@ pub struct App {
     pub conn: Connection,
     /// The main window.
     pub win: WindowId,
+    wins: [Win; 3],
+    drag: Option<Drag>,
+    /// Until when to hold newly mapped windows where they belong: some
+    /// window managers place them their own way first (openbox centers
+    /// transient windows on their owner; Fluxbox may ignore the position
+    /// asked for), but do move them when asked afterwards.
+    settle: Option<Instant>,
     /// Playback.
     pub player: Player,
     /// The playlist.
@@ -81,13 +127,10 @@ pub struct App {
     pub cfg: Config,
     config_dir: Option<PathBuf>,
     fps: u32,
-    canvas: Canvas,
-    shown: Canvas,
-    scaled: Canvas,
-    pane_canvas: [Canvas; 3],
     grab: Option<Pane>,
     keys_to: Pane,
-    focused: bool,
+    /// Which windows have the keyboard focus.
+    focused: [bool; 3],
     popup: Option<Menu>,
     /// When the popup opened, and whether it has the keyboard (without a
     /// window manager, a new window takes the focus).
@@ -101,7 +144,6 @@ pub struct App {
     scroll_acc: Duration,
     /// Set when the user asked to quit.
     pub quit: bool,
-    full_redraw: bool,
     /// Panes an event reached since the last frame (main, eq, playlist).
     dirty: [bool; 3],
     /// What the eq and playlist panes last showed, summarized.
@@ -161,21 +203,49 @@ impl App {
         playlist.set_shuffle(cfg.shuffle);
 
         let scale = if cfg.double { 2 } else { 1 };
-        let (w, h) = layout_size(&cfg, scale);
-        let win = conn.create_window(
-            WindowOptions::new(w, h).title("phonolite").class("phonolite", "Phonolite").decorations(false).resizable(false).always_on_top(cfg.on_top),
-        )?;
-        let _ = conn.set_icon(win, &icon().frame());
+        let pl = PlaylistPane::new(cfg.pl_height);
+        let sizes = [(WIDTH, HEIGHT), (WIDTH, HEIGHT), (WIDTH, pl.height())].map(|(w, h)| (w * scale, h * scale));
+        let positions = placement(&cfg, sizes, conn.screen_size());
+        let mut ids = Vec::new();
+        for (i, (title, shown)) in [("phonolite", true), ("phonolite equalizer", cfg.show_eq), ("phonolite playlist", cfg.show_pl)].into_iter().enumerate() {
+            let ((w, h), (x, y)) = (sizes[i], positions[i]);
+            let mut o = WindowOptions::new(w, h)
+                .title(title)
+                .class("phonolite", "Phonolite")
+                .position(x, y)
+                .decorations(false)
+                .resizable(false)
+                .always_on_top(cfg.on_top)
+                .visible(shown);
+            if let Some(&main) = ids.first() {
+                // The window manager's cue that these belong to the main one.
+                o = o.transient_for(main);
+            }
+            let id = conn.create_window(o)?;
+            let _ = conn.set_icon(id, &icon().frame());
+            ids.push(id);
+        }
+        let win = ids[0];
+        let wins = [0, 1, 2].map(|i| Win {
+            id: ids[i],
+            canvas: Canvas::new(1, 1),
+            shown: Canvas::new(1, 1),
+            scaled: Canvas::new(1, 1),
+            pos: positions[i],
+            full: true,
+        });
         let fonts = Fonts::new(&skin);
         let mut eq = EqPane::new();
         eq.set(&cfg.eq, cfg.eq_auto);
-        let pl = PlaylistPane::new(cfg.pl_height);
         let mut main = MainPane::new();
         main.spectrum = crate::vis::Spectrum::with_rate(opts.decoding.rate());
         let now = Instant::now();
         let mut app = App {
             conn,
             win,
+            wins,
+            drag: None,
+            settle: Some(Instant::now() + SETTLE),
             player,
             playlist,
             skin,
@@ -186,13 +256,9 @@ impl App {
             cfg,
             config_dir: opts.config_dir,
             fps: opts.fps.clamp(1, 100),
-            canvas: Canvas::new(1, 1),
-            shown: Canvas::new(1, 1),
-            scaled: Canvas::new(1, 1),
-            pane_canvas: [Canvas::new(WIDTH, HEIGHT), Canvas::new(WIDTH, HEIGHT), Canvas::new(WIDTH, 1)],
             grab: None,
             keys_to: Pane::Main,
-            focused: true,
+            focused: [true, false, false],
             popup: None,
             popup_since: now,
             popup_focused: false,
@@ -203,7 +269,6 @@ impl App {
             last_tick: now,
             scroll_acc: Duration::ZERO,
             quit: false,
-            full_redraw: true,
             dirty: [true; 3],
             keys: Default::default(),
             rows_version: 0,
@@ -230,49 +295,106 @@ impl App {
         }
     }
 
-    fn pane_y(&self, p: Pane) -> i32 {
+    /// A pane's size at 1x.
+    fn pane_size(&self, p: Pane) -> (u32, u32) {
         match p {
-            Pane::Main => 0,
-            Pane::Eq => HEIGHT as i32,
-            Pane::Pl => HEIGHT as i32 * (1 + i32::from(self.cfg.show_eq)),
+            Pane::Main | Pane::Eq => (WIDTH, HEIGHT),
+            Pane::Pl => (WIDTH, self.pl.height()),
         }
     }
 
-    fn pane_at(&self, y: i32) -> Pane {
-        if y < HEIGHT as i32 {
-            Pane::Main
-        } else if self.cfg.show_eq && y < 2 * HEIGHT as i32 {
-            Pane::Eq
-        } else if self.cfg.show_pl {
-            Pane::Pl
-        } else {
-            Pane::Main
+    /// Whether a window is shown.
+    pub fn is_shown(&self, p: Pane) -> bool {
+        match p {
+            Pane::Main => true,
+            Pane::Eq => self.cfg.show_eq,
+            Pane::Pl => self.cfg.show_pl,
         }
     }
 
-    /// Size, shape and canvases for the panes shown.
+    /// Where a window is on the screen, and its size there.
+    pub fn bounds(&self, p: Pane) -> Bounds {
+        let (w, h) = self.pane_size(p);
+        let (s, (x, y)) = (self.scale() as i32, self.wins[p as usize].pos);
+        Bounds::new(x, y, w as i32 * s, h as i32 * s)
+    }
+
+    /// The windows shown, by pane (`None`: hidden).
+    fn shown_bounds(&self) -> [Option<Bounds>; 3] {
+        Pane::ALL.map(|p| self.is_shown(p).then(|| self.bounds(p)))
+    }
+
+    /// A window's X id.
+    pub fn window(&self, p: Pane) -> WindowId {
+        self.wins[p as usize].id
+    }
+
+    fn pane_of(&self, w: WindowId) -> Option<Pane> {
+        Pane::ALL.into_iter().find(|&p| self.wins[p as usize].id == w)
+    }
+
+    fn move_window(&mut self, p: Pane, pos: (i32, i32)) {
+        let w = &mut self.wins[p as usize];
+        if w.pos != pos {
+            w.pos = pos;
+            let _ = self.conn.set_position(w.id, pos.0, pos.1);
+        }
+    }
+
+    /// Ask the server where the shown windows really are: a window
+    /// manager may have placed or moved them.
+    fn refresh_positions(&mut self) {
+        if self.settle.is_some() {
+            return; // where they are may still be the window manager's idea
+        }
+        for p in Pane::ALL {
+            if self.is_shown(p) {
+                if let Ok(pos) = self.conn.window_position(self.wins[p as usize].id) {
+                    self.wins[p as usize].pos = pos;
+                }
+            }
+        }
+    }
+
+    fn set_shown(&mut self, p: Pane, on: bool) {
+        match p {
+            Pane::Main => return,
+            Pane::Eq => self.cfg.show_eq = on,
+            Pane::Pl => self.cfg.show_pl = on,
+        }
+        let id = self.wins[p as usize].id;
+        let _ = if on { self.conn.show(id) } else { self.conn.hide(id) };
+        if on {
+            self.settle = Some(Instant::now() + SETTLE);
+        }
+        self.wins[p as usize].full = true;
+    }
+
+    /// Sizes, shape and canvases.
     fn relayout(&mut self) {
         self.cfg.pl_height = self.pl.height();
         let s = self.scale();
-        let (w, h) = layout_size(&self.cfg, 1);
-        if self.canvas.height() != h {
-            self.canvas = Canvas::new(w, h);
-            self.shown = Canvas::new(w, h);
+        for p in Pane::ALL {
+            let (w, h) = self.pane_size(p);
+            let win = &mut self.wins[p as usize];
+            if win.canvas.width() != w || win.canvas.height() != h {
+                win.canvas = Canvas::new(w, h);
+                win.shown = Canvas::new(w, h);
+            }
+            if s > 1 && (win.scaled.width() != w * s || win.scaled.height() != h * s) {
+                win.scaled = Canvas::new(w * s, h * s);
+            }
+            win.full = true;
+            if self.conn.window_size(win.id).ok() != Some((w * s, h * s)) {
+                let _ = self.conn.set_size(win.id, w * s, h * s);
+            }
         }
-        if self.scaled.width() != w * s || self.scaled.height() != h * s {
-            self.scaled = Canvas::new(w * s, h * s);
-        }
-        self.pane_canvas[2] = Canvas::new(WIDTH, self.pl.height());
-        let _ = self.conn.set_size(self.win, w * s, h * s);
-        // Shape: the skin's region for the main pane, the rest whole.
+        // The skin's region shapes the main window.
         if self.conn.supports_shape() {
             match &self.skin.region {
                 Some(poly) => {
                     let mask = skin::region_mask(poly, WIDTH, HEIGHT);
-                    let mut rects = rects_from_mask(WIDTH * s, HEIGHT * s, |x, y| mask[((y / s) * WIDTH + x / s) as usize]);
-                    if h > HEIGHT {
-                        rects.push(Rect::new(0, (HEIGHT * s) as i32, w * s, (h - HEIGHT) * s));
-                    }
+                    let rects = rects_from_mask(WIDTH * s, HEIGHT * s, |x, y| mask[((y / s) * WIDTH + x / s) as usize]);
                     let _ = self.conn.set_shape(self.win, &rects);
                 }
                 None => {
@@ -280,7 +402,74 @@ impl App {
                 }
             }
         }
-        self.full_redraw = true;
+    }
+
+    // ------------------------------------------------------------ moving
+
+    /// Put back any shown window the window manager placed elsewhere.
+    fn hold_places(&mut self) {
+        for p in Pane::ALL {
+            let (id, pos) = (self.wins[p as usize].id, self.wins[p as usize].pos);
+            if self.is_shown(p) && self.conn.window_position(id).is_ok_and(|at| at != pos) {
+                let _ = self.conn.set_position(id, pos.0, pos.1);
+            }
+        }
+    }
+
+    /// The pointer went down on `p`'s title bar at `from` (screen
+    /// coordinates): the main window takes along everything docked to it,
+    /// directly or through others; the others go alone, leaving the group.
+    fn start_drag(&mut self, p: Pane, from: (i32, i32)) {
+        self.refresh_positions();
+        let moving = if p == Pane::Main { snap::group(&self.shown_bounds(), 0) } else { vec![p as usize] };
+        self.drag = Some(Drag { from, moving: moving.into_iter().map(|i| (Pane::ALL[i], self.wins[i].pos)).collect() });
+    }
+
+    /// The pointer is at `to`: move the dragged windows, snapped.
+    fn drag_to(&mut self, to: (i32, i32)) {
+        let Some(d) = &self.drag else { return };
+        let (dx, dy) = (to.0 - d.from.0, to.1 - d.from.1);
+        let moving: Vec<(Pane, (i32, i32))> = d.moving.iter().map(|&(p, (x, y))| (p, (x + dx, y + dy))).collect();
+        let want: Vec<Bounds> = moving.iter().map(|&(p, (x, y))| self.bounds(p).at(x, y)).collect();
+        let others: Vec<Bounds> = Pane::ALL.into_iter().filter(|p| self.is_shown(*p) && !moving.iter().any(|m| m.0 == *p)).map(|p| self.bounds(p)).collect();
+        let (sw, sh) = self.conn.screen_size();
+        let (sx, sy) = snap::snap(&want, &others, Bounds::new(0, 0, sw as i32, sh as i32));
+        for (p, (x, y)) in moving {
+            self.move_window(p, (x + sx, y + sy));
+        }
+    }
+
+    /// Double size on or off: windows docked to the main one stay docked
+    /// (their offsets from it scale too); the rest stay where they are.
+    fn toggle_double(&mut self) {
+        self.refresh_positions();
+        // Hidden windows count: one shown later belongs where it was.
+        let all = Pane::ALL.map(|p| Some(self.bounds(p)));
+        let docked = snap::group(&all, 0);
+        let old = self.scale() as i32;
+        self.cfg.double = !self.cfg.double;
+        let new = self.scale() as i32;
+        let (mx, my) = self.wins[0].pos;
+        for i in docked.into_iter().skip(1) {
+            let (x, y) = self.wins[i].pos;
+            self.move_window(Pane::ALL[i], (mx + (x - mx) * new / old, my + (y - my) * new / old));
+        }
+        self.relayout();
+    }
+
+    /// A new playlist height: what was docked under the playlist stays
+    /// docked.
+    fn resize_playlist(&mut self, h: u32) {
+        let before = self.bounds(Pane::Pl);
+        self.pl.set_height(h);
+        let after = self.bounds(Pane::Pl);
+        for p in [Pane::Main, Pane::Eq] {
+            let b = self.bounds(p);
+            if after.h != before.h && b.y == before.bottom() && b.x < before.right() && before.x < b.right() {
+                self.move_window(p, (b.x, b.y + after.h - before.h));
+            }
+        }
+        self.relayout();
     }
 
     fn set_skin(&mut self, skin: Skin) {
@@ -450,31 +639,25 @@ impl App {
                 self.playlist.repeat = on;
                 self.cfg.repeat = on;
             }
-            Action::ShowEq(on) => {
-                self.cfg.show_eq = on;
-                self.relayout();
-            }
-            Action::ShowPlaylist(on) => {
-                self.cfg.show_pl = on;
-                self.relayout();
-            }
+            Action::ShowEq(on) => self.set_shown(Pane::Eq, on),
+            Action::ShowPlaylist(on) => self.set_shown(Pane::Pl, on),
             Action::Minimize => {
-                let _ = self.conn.minimize(self.win);
+                for p in Pane::ALL {
+                    if self.is_shown(p) {
+                        let _ = self.conn.minimize(self.wins[p as usize].id);
+                    }
+                }
             }
             Action::Quit => self.quit = true,
-            Action::DragWindow(x, y) => {
-                let _ = self.conn.begin_drag_move(self.win, x, y, MouseButton::Left);
-                self.grab = None;
-            }
+            Action::DragWindow(x, y) => self.start_drag(self.grab.unwrap_or(Pane::Main), (x, y)),
             Action::Menu(kind, x, y) => self.open_menu(kind, x, y),
             Action::AlwaysOnTop => {
                 self.cfg.on_top = !self.cfg.on_top;
-                let _ = self.conn.set_always_on_top(self.win, self.cfg.on_top);
+                for w in &self.wins {
+                    let _ = self.conn.set_always_on_top(w.id, self.cfg.on_top);
+                }
             }
-            Action::DoubleSize => {
-                self.cfg.double = !self.cfg.double;
-                self.relayout();
-            }
+            Action::DoubleSize => self.toggle_double(),
             Action::NextVisMode => self.cfg.vis = self.cfg.vis.next(),
             Action::TimeMode => self.cfg.remaining = !self.cfg.remaining,
             Action::Equalizer(eq) => {
@@ -489,10 +672,7 @@ impl App {
                 self.playlist.remove(i);
                 self.refresh_rows();
             }
-            Action::ResizePlaylist(h) => {
-                self.pl.set_height(h);
-                self.relayout();
-            }
+            Action::ResizePlaylist(h) => self.resize_playlist(h),
         }
     }
 
@@ -762,37 +942,56 @@ impl App {
             }
             return;
         }
-        if w != self.win {
-            return;
+        let Some(p) = self.pane_of(w) else { return };
+        if self.drag.is_some() {
+            match e {
+                Event::Motion { root_x, root_y, .. } => return self.drag_to((root_x, root_y)),
+                Event::Button { button: MouseButton::Left, pressed: false, root_x, root_y, .. } => {
+                    self.drag_to((root_x, root_y));
+                    self.drag = None;
+                    self.grab = None;
+                    return;
+                }
+                _ => {}
+            }
         }
         match e {
-            Event::CloseRequested { .. } => self.quit = true,
-            Event::Focused { focused, .. } => self.focused = focused,
-            Event::Resized { .. } => self.full_redraw = true,
+            Event::CloseRequested { .. } => match p {
+                Pane::Main => self.quit = true,
+                Pane::Eq => self.act(Action::ShowEq(false)),
+                Pane::Pl => self.act(Action::ShowPlaylist(false)),
+            },
+            Event::Focused { focused, .. } => {
+                self.focused[p as usize] = focused;
+                self.dirty[p as usize] = true;
+                if focused {
+                    self.keys_to = p;
+                    self.pl.list.set_focused(p == Pane::Pl);
+                }
+            }
+            Event::Resized { .. } => self.wins[p as usize].full = true,
             Event::Key { pressed: true, .. } => self.key(&e),
             Event::Button { pressed: true, .. } if self.popup.is_some() => self.close_popup(),
             Event::Button { .. } | Event::Motion { .. } | Event::Scroll { .. } => {
                 let s = self.scale() as i32;
-                let Some((_, y)) = common::pointer(&e) else { return };
-                let pane = self.grab.unwrap_or_else(|| self.pane_at(y.div_euclid(s)));
-                self.dirty[pane as usize] = true;
+                self.dirty[p as usize] = true;
                 if let Event::Button { pressed: true, .. } = e {
-                    self.grab = Some(pane);
-                    self.keys_to = pane;
-                    self.pl.list.set_focused(pane == Pane::Pl);
+                    self.grab = Some(p);
+                    self.keys_to = p;
+                    self.pl.list.set_focused(p == Pane::Pl);
                 }
-                let le = local(&e, s, 0, self.pane_y(pane));
+                let le = local(&e, s, 0, 0);
                 let view = self.view();
-                let actions = match pane {
+                let actions = match p {
                     Pane::Main => self.main.handle(&le, &view),
                     Pane::Eq => self.eq.handle(&le),
                     Pane::Pl => self.pl.handle(&le),
                 };
-                if let Event::Button { pressed: false, .. } = e {
-                    self.grab = None;
-                }
                 for a in actions {
                     self.act(a);
+                }
+                if let Event::Button { pressed: false, .. } = e {
+                    self.grab = None;
                 }
             }
             _ => {}
@@ -856,7 +1055,7 @@ impl App {
     /// event).
     pub fn timeout(&self) -> Option<Duration> {
         let frame = Duration::from_millis(1000 / u64::from(self.fps));
-        if self.message.is_some() || self.popup.is_some() {
+        if self.message.is_some() || self.popup.is_some() || self.settle.is_some() {
             return Some(frame.max(Duration::from_millis(50)));
         }
         match self.player.status() {
@@ -899,7 +1098,7 @@ impl App {
             kbps: stream.map(|s| s.bitrate),
             khz: stream.map(|s| (s.rate + 500) / 1000),
             channels: stream.map(|s| s.channels),
-            focused: self.focused,
+            focused: self.focused[0],
             remaining: self.cfg.remaining,
             blink: self.started.elapsed().as_millis() % 1000 < 600,
             on_top: self.cfg.on_top,
@@ -917,10 +1116,15 @@ impl App {
     /// Advance: take the player's news, animate.
     pub fn tick(&mut self) {
         self.handle_updates();
+        match self.settle {
+            Some(until) if Instant::now() < until => self.hold_places(),
+            Some(_) => self.settle = None,
+            None => {}
+        }
         // A click in another program takes the focus from us: close the
         // menu then (after a moment, so a focus hand-off between our own
         // windows does not count).
-        if self.popup.is_some() && !self.focused && !self.popup_focused && self.popup_since.elapsed() > Duration::from_millis(300) {
+        if self.popup.is_some() && !self.focused.contains(&true) && !self.popup_focused && self.popup_since.elapsed() > Duration::from_millis(300) {
             self.close_popup();
         }
         let now = Instant::now();
@@ -951,7 +1155,7 @@ impl App {
         self.grab == Some(Pane::Eq)
     }
 
-    /// Draw what changed and send it. The main pane redraws every time;
+    /// Draw what changed and send it. The main window redraws every time;
     /// the equalizer and playlist only when an event reached them or what
     /// they show changed — during playback that is rare, and redrawing and
     /// comparing them every frame would be most of the work.
@@ -959,61 +1163,63 @@ impl App {
         let view = self.view();
         let samples = if self.cfg.vis == Mode::Scope { self.player.samples(576) } else { None };
         let current = self.heard_index().or(self.playlist.current());
-        let full = std::mem::take(&mut self.full_redraw);
+        let shown = Pane::ALL.map(|p| self.is_shown(p));
+        let full = [0, 1, 2].map(|i| shown[i] && std::mem::take(&mut self.wins[i].full));
         let e = &self.cfg.eq;
-        let eq_key = format!("{}{}{:?}{}{}", e.on, e.preamp.to_bits(), e.bands.map(f64::to_bits), self.cfg.eq_auto, view.focused);
+        let eq_key = format!("{}{}{:?}{}{}", e.on, e.preamp.to_bits(), e.bands.map(f64::to_bits), self.cfg.eq_auto, self.focused[1]);
         let mini = if view.status == Status::Stopped { String::new() } else { format!("{}{}", view.position as u64, view.remaining) };
-        let pl_key = format!("{}|{current:?}|{mini}|{:?}|{}", self.rows_version, view.status, view.focused);
-        let redraw_eq = self.cfg.show_eq && (full || self.dirty[1] || self.keys[1] != eq_key);
-        let redraw_pl = self.cfg.show_pl && (full || self.dirty[2] || self.keys[2] != pl_key);
+        let pl_key = format!("{}|{current:?}|{mini}|{:?}|{}", self.rows_version, view.status, self.focused[2]);
+        let redraw_eq = shown[1] && (full[1] || self.dirty[1] || self.keys[1] != eq_key);
+        let redraw_pl = shown[2] && (full[2] || self.dirty[2] || self.keys[2] != pl_key);
         self.keys[1] = eq_key;
         self.keys[2] = pl_key;
-
         let main_key = self.main.look(&view);
-        let redraw_main = full || self.dirty[0] || self.keys[0] != main_key;
+        let redraw_main = full[0] || self.dirty[0] || self.keys[0] != main_key;
         self.keys[0] = main_key;
         self.dirty = [false; 3];
 
-        let [mc, ec, pc] = &mut self.pane_canvas;
-        let mut bands = Vec::new();
+        // Rows drawn, per window.
+        let mut bands: [Vec<(u32, u32)>; 3] = Default::default();
+        let [mw, ew, pw] = &mut self.wins;
         if redraw_main {
-            self.main.draw(mc, &self.skin, &self.fonts, &view, samples.as_deref());
-            self.canvas.blit(&mc.frame(), mc.bounds(), 0, 0);
-            bands.push((0, HEIGHT));
+            self.main.draw(&mut mw.canvas, &self.skin, &self.fonts, &view, samples.as_deref());
+            bands[0].push((0, HEIGHT));
         } else {
             // Most frames: just the visualizer and the scrolling title.
             use crate::skin::layout::main as m;
-            self.main.draw_vis(mc, &self.skin, &view, samples.as_deref());
-            self.main.draw_marquee(mc, &self.skin, &self.fonts, &view);
+            self.main.draw_vis(&mut mw.canvas, &self.skin, &view, samples.as_deref());
+            self.main.draw_marquee(&mut mw.canvas, &self.skin, &self.fonts, &view);
             for r in [m::VIS, m::MARQUEE] {
-                self.canvas.blit(&mc.frame(), r, r.x, r.y);
-                bands.push((r.y as u32, r.height));
+                bands[0].push((r.y as u32, r.height));
             }
         }
         if redraw_eq {
-            self.eq.draw(ec, &self.skin, view.focused);
-            self.canvas.blit(&ec.frame(), ec.bounds(), 0, HEIGHT as i32);
-            bands.push((HEIGHT, HEIGHT));
+            self.eq.draw(&mut ew.canvas, &self.skin, self.focused[1]);
+            bands[1].push((0, HEIGHT));
         }
         if redraw_pl {
-            self.pl.draw(pc, &self.skin, &self.fonts, &self.playlist.entries, current, &view);
-            let y = HEIGHT * (1 + u32::from(self.cfg.show_eq));
-            self.canvas.blit(&pc.frame(), pc.bounds(), 0, y as i32);
-            bands.push((y, pc.height()));
+            let v = View { focused: self.focused[2], ..view.clone() };
+            self.pl.draw(&mut pw.canvas, &self.skin, &self.fonts, &self.playlist.entries, current, &v);
+            bands[2].push((0, pw.canvas.height()));
         }
-        let rects =
-            if full { vec![self.canvas.bounds()] } else { bands.iter().flat_map(|&(y, h)| common::damage_rows(&self.shown, &self.canvas, y, h)).collect() };
         let s = self.scale();
-        for r in &rects {
-            if s == 1 {
-                self.conn.present_rect(self.win, &self.canvas.frame(), *r)?;
-            } else {
-                let to = Rect::new(r.x * s as i32, r.y * s as i32, r.width * s, r.height * s);
-                self.scaled.blit_with(&self.canvas.frame(), *r, to, Blit::Copy);
-                self.conn.present_rect(self.win, &self.scaled.frame(), to)?;
+        for (i, w) in self.wins.iter_mut().enumerate() {
+            if !shown[i] {
+                continue;
             }
-            // What is on screen now.
-            self.shown.blit(&self.canvas.frame(), *r, r.x, r.y);
+            let rects =
+                if full[i] { vec![w.canvas.bounds()] } else { bands[i].iter().flat_map(|&(y, h)| common::damage_rows(&w.shown, &w.canvas, y, h)).collect() };
+            for r in &rects {
+                if s == 1 {
+                    self.conn.present_rect(w.id, &w.canvas.frame(), *r)?;
+                } else {
+                    let to = Rect::new(r.x * s as i32, r.y * s as i32, r.width * s, r.height * s);
+                    w.scaled.blit_with(&w.canvas.frame(), *r, to, Blit::Copy);
+                    self.conn.present_rect(w.id, &w.scaled.frame(), to)?;
+                }
+                // What is on screen now.
+                w.shown.blit(&w.canvas.frame(), *r, r.x, r.y);
+            }
         }
         Ok(())
     }
@@ -1036,6 +1242,8 @@ impl App {
     /// Save settings and the playlist.
     pub fn save(&mut self) {
         let Some(d) = self.config_dir.clone() else { return };
+        self.refresh_positions();
+        self.cfg.positions = [0, 1, 2].map(|i| Some(self.wins[i].pos));
         self.cfg.current = self.heard_index().or(self.playlist.current());
         if let Err(e) = self.cfg.save(&d) {
             eprintln!("phonolite: saving settings: {e}");
@@ -1045,32 +1253,30 @@ impl App {
         }
     }
 
-    /// Every pane drawn from scratch, nothing cached — what the window
-    /// should show (for checking the caching in [`App::render`]).
-    pub fn render_all(&mut self) -> Canvas {
+    /// A pane drawn from scratch, nothing cached — what its window should
+    /// show (for checking the caching in [`App::render`]).
+    pub fn render_all(&mut self, p: Pane) -> Canvas {
         let view = self.view();
-        let samples = if self.cfg.vis == Mode::Scope { self.player.samples(576) } else { None };
-        let current = self.heard_index().or(self.playlist.current());
-        let mut out = Canvas::new(self.canvas.width(), self.canvas.height());
-        let mut c = Canvas::new(WIDTH, HEIGHT);
-        self.main.draw(&mut c, &self.skin, &self.fonts, &view, samples.as_deref());
-        out.blit(&c.frame(), c.bounds(), 0, 0);
-        if self.cfg.show_eq {
-            let mut c = Canvas::new(WIDTH, HEIGHT);
-            self.eq.draw(&mut c, &self.skin, view.focused);
-            out.blit(&c.frame(), c.bounds(), 0, HEIGHT as i32);
+        let (w, h) = self.pane_size(p);
+        let mut c = Canvas::new(w, h);
+        match p {
+            Pane::Main => {
+                let samples = if self.cfg.vis == Mode::Scope { self.player.samples(576) } else { None };
+                self.main.draw(&mut c, &self.skin, &self.fonts, &view, samples.as_deref());
+            }
+            Pane::Eq => self.eq.draw(&mut c, &self.skin, self.focused[1]),
+            Pane::Pl => {
+                let current = self.heard_index().or(self.playlist.current());
+                let v = View { focused: self.focused[2], ..view };
+                self.pl.draw(&mut c, &self.skin, &self.fonts, &self.playlist.entries, current, &v);
+            }
         }
-        if self.cfg.show_pl {
-            let mut c = Canvas::new(WIDTH, self.pl.height());
-            self.pl.draw(&mut c, &self.skin, &self.fonts, &self.playlist.entries, current, &view);
-            out.blit(&c.frame(), c.bounds(), 0, (HEIGHT * (1 + u32::from(self.cfg.show_eq))) as i32);
-        }
-        out
+        c
     }
 
-    /// What was last sent to the window, at 1x.
-    pub fn frame(&self) -> &Canvas {
-        &self.shown
+    /// What was last sent to a window, at 1x.
+    pub fn frame(&self, p: Pane) -> &Canvas {
+        &self.wins[p as usize].shown
     }
 
     /// The display scale (2 at double size).
@@ -1105,16 +1311,32 @@ impl Drop for App {
     }
 }
 
-/// Window size for these settings at a scale.
-fn layout_size(cfg: &Config, scale: u32) -> (u32, u32) {
-    let mut h = HEIGHT;
-    if cfg.show_eq {
-        h += HEIGHT;
+/// How long newly mapped windows are held in place.
+const SETTLE: Duration = Duration::from_secs(2);
+
+/// Where the windows go: where they were last time (as long as the main
+/// window is still on the screen), else stacked, docked, in the middle of
+/// the screen — the shown ones first, then the hidden.
+fn placement(cfg: &Config, sizes: [(u32, u32); 3], (sw, sh): (u32, u32)) -> [(i32, i32); 3] {
+    let order = [true, cfg.show_eq, cfg.show_pl];
+    let shown_h: u32 = (0..3).filter(|&i| order[i]).map(|i| sizes[i].1).sum();
+    let x = (sw as i32 - sizes[0].0 as i32) / 2;
+    let mut y = ((sh as i32 - shown_h as i32) / 2).max(0);
+    let mut out = [(x, 0); 3];
+    for i in (0..3).filter(|&i| order[i]).chain((0..3).filter(|&i| !order[i])) {
+        out[i].1 = y;
+        y += sizes[i].1 as i32;
     }
-    if cfg.show_pl {
-        h += crate::app::pl_pane::snap_height(i64::from(cfg.pl_height));
+    let main_visible = cfg.positions[0]
+        .is_some_and(|(x, y)| Bounds::new(x, y, sizes[0].0 as i32, sizes[0].1 as i32).right() > 8 && x < sw as i32 - 8 && y >= -8 && y < sh as i32 - 8);
+    if main_visible {
+        for (slot, saved) in out.iter_mut().zip(cfg.positions) {
+            if let Some(p) = saved {
+                *slot = p;
+            }
+        }
     }
-    (WIDTH * scale, h * scale)
+    out
 }
 
 /// A 32x32 icon: a faceted stone on dark.
@@ -1133,4 +1355,36 @@ pub fn icon() -> Canvas {
     }
     c.fill_rect(Rect::new(12, 6, 3, 3), 0xffffff);
     c
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SIZES: [(u32, u32); 3] = [(275, 116), (275, 116), (275, 232)];
+
+    #[test]
+    fn first_run_stacks_the_windows_docked_in_the_middle() {
+        let cfg = Config::default();
+        assert_eq!(placement(&cfg, SIZES, (1024, 768)), [(374, 152), (374, 268), (374, 384)]);
+        // The equalizer hidden: the playlist docks to the main window, and
+        // the equalizer waits below it.
+        let cfg = Config { show_eq: false, ..Config::default() };
+        assert_eq!(placement(&cfg, SIZES, (1024, 768)), [(374, 210), (374, 558), (374, 326)]);
+        // A screen smaller than the stack: from the top.
+        assert_eq!(placement(&Config::default(), SIZES, (640, 400))[0], (182, 0));
+    }
+
+    #[test]
+    fn saved_places_are_kept_unless_the_main_window_would_be_lost() {
+        let saved = [Some((10, 20)), Some((600, 20)), None];
+        let cfg = Config { positions: saved, ..Config::default() };
+        assert_eq!(placement(&cfg, SIZES, (1024, 768)), [(10, 20), (600, 20), (374, 384)], "a missing one takes its default");
+        // Saved on a bigger screen, now off this one: everything resets.
+        let cfg = Config { positions: [Some((1500, 900)), Some((1500, 1016)), Some((1500, 1132))], ..Config::default() };
+        assert_eq!(placement(&cfg, SIZES, (1024, 768)), placement(&Config::default(), SIZES, (1024, 768)));
+        // Partly off the left edge, but still there to grab: kept.
+        let cfg = Config { positions: [Some((-200, 100)), None, None], ..Config::default() };
+        assert_eq!(placement(&cfg, SIZES, (1024, 768))[0], (-200, 100));
+    }
 }
