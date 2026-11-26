@@ -35,3 +35,9 @@ First version: a classic-skinned mpg123 frontend on protolith.
   the server. Measured: 1.65 % of a core at 30 fps, 0.95 % at
   `--rate 22050 --fps 10`.
 - Settings and playlist kept in `$XDG_CONFIG_HOME/phonolite`.
+- **The i486 build** (`tools/build-i486.sh`, Stele's target and recipe):
+  423 KB, from 570 KB, under a 440 KB budget in CI. Cut: unwind tables
+  (`-Cforce-unwind-tables=no`) and the unwinder (an empty `libunwind`
+  stand-in instead of `libgcc_eh`), std's float formatting and parsing
+  and musl's libm (replaced by `num`, tested against std), and libc's DNS
+  resolver (protolith now resolves TCP display hosts itself).

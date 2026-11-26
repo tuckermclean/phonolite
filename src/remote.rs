@@ -3,6 +3,8 @@
 //!
 //! Pure text in, values out — no processes here (see [`crate::engine`]).
 
+use crate::num::{fixed, parse_decimal};
+
 /// What mpg123 is doing, from its `@P` lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayState {
@@ -110,7 +112,7 @@ pub fn parse(line: &str) -> Message {
             _ => other(),
         },
         "J" => body.trim().parse().map(Message::Jumped).unwrap_or_else(|_| other()),
-        "V" => body.trim().trim_end_matches('%').parse().map(Message::Volume).unwrap_or_else(|_| other()),
+        "V" => parse_decimal(body.trim().trim_end_matches('%')).map(Message::Volume).unwrap_or_else(other),
         "E" => Message::Error(body.into()),
         _ => other(),
     }
@@ -190,7 +192,7 @@ fn parse_progress(body: &str) -> Option<Progress> {
     if f.len() != 4 {
         return None;
     }
-    Some(Progress { frame: f[0].parse().ok()?, frames_left: f[1].parse().ok()?, seconds: f[2].parse().ok()?, seconds_left: f[3].parse().ok()? })
+    Some(Progress { frame: f[0].parse().ok()?, frames_left: f[1].parse().ok()?, seconds: parse_decimal(f[2])?, seconds_left: parse_decimal(f[3])? })
 }
 
 /// A command for mpg123, rendered by [`Command::line`].
@@ -230,9 +232,9 @@ impl Command {
             Command::LoadPaused(p) => format!("LOADPAUSED {p}"),
             Command::Pause => "PAUSE".into(),
             Command::Stop => "STOP".into(),
-            Command::JumpTo(s) => format!("JUMP {:.3}s", s.max(0.0)),
-            Command::Volume(v) => format!("VOLUME {:.1}", v.max(0.0)),
-            Command::Eq(c, b, v) => format!("EQ {c} {b} {:.4}", v.max(0.0)),
+            Command::JumpTo(s) => format!("JUMP {}s", fixed(s.max(0.0), 3)),
+            Command::Volume(v) => format!("VOLUME {}", fixed(v.max(0.0), 1)),
+            Command::Eq(c, b, v) => format!("EQ {c} {b} {}", fixed(v.max(0.0), 4)),
             Command::Silence => "SILENCE".into(),
             Command::Progress => "PROGRESS".into(),
             Command::Quit => "QUIT".into(),

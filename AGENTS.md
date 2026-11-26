@@ -9,12 +9,16 @@ purpose; doc comments and `README.md` say *what* it is.
    widgets. Audio is mpg123's (a separate program); everything else
    (inflate, ZIP, FFT, M3U/PLS) is here in std-only Rust. No `unsafe`
    (`#![forbid(unsafe_code)]`).
-2. **It must be able to run on a 486.** One decoder process, never two
-   (an earlier design ran a second mpg123 for the visualizer — rejected for
-   exactly this). The pump does one pass over the samples. Panes redraw
-   only when what they show changed, and only changed pixels are sent.
-   Measure CPU (`/proc/<pid>/stat` ticks over a fixed playback window)
-   before and after anything that runs per frame or per sample.
+2. **It runs on a Pentium; a 486DX2 is the stretch goal** — like Stele
+   and protolith, which exist for that hardware. The build that counts is
+   `tools/build-i486.sh` (Stele's i486 musl target, std rebuilt, panics
+   aborting, no unwind tables; podman and the monolith-builder image), held
+   to a size budget there. Judge size on it, never on x86_64. One decoder
+   process, never two (a second mpg123 for the visualizer was rejected for
+   this). The pump does one pass over the samples. Panes redraw only when
+   what they show changed, and only changed pixels are sent. Measure CPU
+   (`/proc/<pid>/stat` ticks over a fixed playback window) before and after
+   anything that runs per frame or per sample.
 3. **MSRV 1.75, stable Rust.** Test on both.
 4. **Test first; never weaken a test to pass.** Mutation-check new
    assertions (break the code, watch the test fail, restore).
@@ -34,10 +38,11 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 PHONOLITE_REQUIRE_MPG123=1 PHONOLITE_REQUIRE_XVFB=1 cargo test
 PHONOLITE_REQUIRE_MPG123=1 PHONOLITE_REQUIRE_XVFB=1 cargo +1.75 test
 for i in $(seq 1 10); do cargo test -q -- --test-threads=16 || break; done
+tools/build-i486.sh    # the target build, and its size budget
 ```
 
-The last line matters: many tests run real mpg123/out123 processes in real
-time, and races show only under load. Needs `mpg123` (which brings
+The stress loop matters: many tests run real mpg123/out123 processes in
+real time, and races show only under load. Needs `mpg123` (which brings
 `out123`) and `xvfb`. protolith is a path dependency (`../protolith`).
 
 ## Test tiers
@@ -70,6 +75,14 @@ time, and races show only under load. Needs `mpg123` (which brings
 - Without a window manager a newly mapped window takes the focus: a popup
   must not close on the main window's focus-out alone.
 - Terminus (the 191-glyph subset) has no `…` or `•`.
+- Size, on the i486 build: `{}`/`{:.N}` on an `f64`, or `str::parse::<f64>`,
+  pulls in ~24 KB of std's float conversion — use `num::fixed` and
+  `num::parse_decimal`. `f64::ln`/`powf`/`sin`/`cos`/`log10` pull ~17 KB of
+  musl's libm — use `num::{ln, exp, pow, log10, sin_cos}`. Find what pulls
+  a symbol in by walking callers in `objdump -d -C` of a `STRIP=false`
+  build. Left in on purpose: musl's `printf` (16 KB), which std's thread
+  spawning reaches through `pthread_setname_np` — avoiding it would need a
+  `#[no_mangle]` override, i.e. `unsafe`.
 
 ## Housekeeping
 

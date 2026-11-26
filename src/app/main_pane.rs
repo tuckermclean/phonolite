@@ -252,8 +252,8 @@ impl MainPane {
         format!(
             "{:?}{}{:?}{:?}{:?}{:?}{}{}{}{}{}{}{}{}{}{}{}{}{}{:?}{}",
             v.status,
-            v.position.floor(),
-            v.duration.map(f64::floor),
+            v.position as u64,
+            v.duration.map(|d| d as u64),
             v.kbps,
             v.khz,
             v.channels,

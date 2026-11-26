@@ -32,7 +32,7 @@ impl Default for Equalizer {
 }
 
 fn db_to_factor(db: f64) -> f64 {
-    10f64.powf(db / 20.0)
+    crate::num::pow(10.0, db / 20.0)
 }
 
 impl Equalizer {
@@ -55,7 +55,8 @@ impl Equalizer {
         }
         for i in 1..10 {
             if f <= FREQUENCIES[i] {
-                let t = (f.ln() - FREQUENCIES[i - 1].ln()) / (FREQUENCIES[i].ln() - FREQUENCIES[i - 1].ln());
+                use crate::num::ln;
+                let t = (ln(f) - ln(FREQUENCIES[i - 1])) / (ln(FREQUENCIES[i]) - ln(FREQUENCIES[i - 1]));
                 return self.bands[i - 1] + t * (self.bands[i] - self.bands[i - 1]);
             }
         }

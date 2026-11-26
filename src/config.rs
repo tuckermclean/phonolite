@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::eq::Equalizer;
+use crate::num::{fixed, parse_decimal};
 use crate::vis::Mode;
 
 /// Everything remembered.
@@ -93,8 +94,8 @@ impl Config {
         let _ = writeln!(s, "shuffle={}", flag(self.shuffle));
         let _ = writeln!(s, "repeat={}", flag(self.repeat));
         let _ = writeln!(s, "eq_on={}", flag(self.eq.on));
-        let _ = writeln!(s, "eq_preamp={}", self.eq.preamp);
-        let _ = writeln!(s, "eq_bands={}", self.eq.bands.iter().map(f64::to_string).collect::<Vec<_>>().join(","));
+        let _ = writeln!(s, "eq_preamp={}", fixed(self.eq.preamp, 2));
+        let _ = writeln!(s, "eq_bands={}", self.eq.bands.iter().map(|b| fixed(*b, 2)).collect::<Vec<_>>().join(","));
         let _ = writeln!(s, "eq_auto={}", flag(self.eq_auto));
         let _ = writeln!(s, "show_eq={}", flag(self.show_eq));
         let _ = writeln!(s, "show_pl={}", flag(self.show_pl));
@@ -136,9 +137,9 @@ impl Config {
                 "shuffle" => c.shuffle = b,
                 "repeat" => c.repeat = b,
                 "eq_on" => c.eq.on = b,
-                "eq_preamp" => c.eq.preamp = v.parse::<f64>().map_or(c.eq.preamp, |x| x.clamp(-12.0, 12.0)),
+                "eq_preamp" => c.eq.preamp = parse_decimal(v).map_or(c.eq.preamp, |x| x.clamp(-12.0, 12.0)),
                 "eq_bands" => {
-                    let vals: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    let vals: Vec<f64> = v.split(',').filter_map(parse_decimal).collect();
                     if vals.len() == 10 {
                         for (slot, x) in c.eq.bands.iter_mut().zip(vals) {
                             *slot = x.clamp(-12.0, 12.0);

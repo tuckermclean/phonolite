@@ -57,9 +57,17 @@ Tracks that run into each other are queued back to back with no gap.
 
 ## Cost
 
-Measured with the visualizer on, over 20 s of playback (CPU time as a share
-of one modern core; the test audio is MPEG Layer I, cheaper to decode than
-MP3, so mpg123's share is understated):
+It is meant for a Pentium, with a 486DX2 as the stretch goal. Built for
+that (`tools/build-i486.sh`: 32-bit static musl for an i486, std rebuilt
+from source, panics aborting), phonolite is **423 KB**; a program that does
+nothing, built the same way, is 58 KB (KB here: 1000 bytes). CI holds it under a 440 KB budget.
+The size pass that set it found, and removed, 147 KB: unwind tables and
+the unwinder (nothing unwinds), std's float formatting and parsing, libm,
+and libc's DNS resolver (via protolith).
+
+CPU, measured on x86_64 with the visualizer on over 20 s of playback (as a
+share of one modern core; the test audio is MPEG Layer I, cheaper to decode
+than MP3, so mpg123's share is understated):
 
 | profile | phonolite | mpg123 | out123 |
 |---|---|---|---|
@@ -67,8 +75,8 @@ MP3, so mpg123's share is understated):
 | `--rate 22050 --fps 10` | 0.95 % | 0.55 % | 0.05 % |
 
 phonolite redraws only what changed (most frames: the visualizer and the
-scrolling title) and sends only changed pixels to the X server. The release
-binary is about 815 KB (opt-level z, LTO, stripped).
+scrolling title) and sends only changed pixels to the X server. (A plain
+x86_64 `cargo build --release`, prebuilt std and all, is 798 KB.)
 
 ## Keys
 

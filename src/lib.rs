@@ -27,6 +27,7 @@ pub mod config;
 pub mod engine;
 pub mod eq;
 pub mod inflate;
+pub mod num;
 pub mod player;
 pub mod playlist;
 pub mod remote;

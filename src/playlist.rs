@@ -349,7 +349,7 @@ pub fn parse_m3u(text: &str, base: &Path) -> Vec<Entry> {
         let line = line.trim_start_matches('\u{feff}').trim();
         if let Some(inf) = line.strip_prefix("#EXTINF:") {
             info = inf.split_once(',').map(|(secs, title)| {
-                let d = secs.split_whitespace().next().and_then(|s| s.parse::<f64>().ok()).filter(|d| *d >= 0.0);
+                let d = secs.split_whitespace().next().and_then(crate::num::parse_decimal).filter(|d| *d >= 0.0);
                 (d, title.trim().to_string())
             });
             continue;
@@ -388,7 +388,7 @@ pub fn parse_pls(text: &str, base: &Path) -> Vec<Entry> {
         } else if let Some(n) = num("title") {
             slot(&mut by_index, n).title = Some(v.to_string()).filter(|t| !t.is_empty());
         } else if let Some(n) = num("length") {
-            slot(&mut by_index, n).duration = v.parse::<f64>().ok().filter(|d| *d >= 0.0);
+            slot(&mut by_index, n).duration = crate::num::parse_decimal(v).filter(|d| *d >= 0.0);
         }
     }
     by_index.sort_by_key(|(n, _)| *n);

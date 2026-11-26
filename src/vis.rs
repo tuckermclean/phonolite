@@ -59,7 +59,8 @@ pub fn fft(re: &mut [f32], im: &mut [f32]) {
     let mut len = 2;
     while len <= n {
         let ang = -2.0 * std::f64::consts::PI / len as f64;
-        let (wr, wi) = (ang.cos() as f32, ang.sin() as f32);
+        let (s, c) = crate::num::sin_cos(ang);
+        let (wr, wi) = (c as f32, s as f32);
         for start in (0..n).step_by(len) {
             let (mut cr, mut ci) = (1.0f32, 0.0f32);
             for k in 0..len / 2 {
@@ -105,12 +106,12 @@ impl Spectrum {
 
     /// Empty bars, for samples at `rate` Hz.
     pub fn with_rate(rate: u32) -> Spectrum {
-        let window = (0..FFT_SIZE).map(|i| (0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / FFT_SIZE as f64).cos()) as f32).collect();
+        let window = (0..FFT_SIZE).map(|i| (0.5 - 0.5 * crate::num::sin_cos(2.0 * std::f64::consts::PI * i as f64 / FFT_SIZE as f64).1) as f32).collect();
         let bin = f64::from(rate.max(1)) / FFT_SIZE as f64;
         let hi = F_HI.min(f64::from(rate) / 2.0 * 0.95);
         let mut edges = [0; BARS + 1];
         for (k, e) in edges.iter_mut().enumerate() {
-            let f = F_LO * (hi / F_LO).powf(k as f64 / BARS as f64);
+            let f = F_LO * crate::num::pow(hi / F_LO, k as f64 / BARS as f64);
             *e = ((f / bin).round() as usize).clamp(1, FFT_SIZE / 2);
         }
         // Every bar gets at least one bin of its own.
@@ -140,7 +141,7 @@ impl Spectrum {
         for (k, o) in out.iter_mut().enumerate() {
             let (lo, hi) = self.bins(k);
             let mag = (lo..hi).map(|b| (re[b] * re[b] + im[b] * im[b]).sqrt() * norm).fold(0.0f32, f32::max);
-            let db = 20.0 * mag.max(1e-9).log10();
+            let db = 20.0 * crate::num::log10(f64::from(mag.max(1e-9))) as f32;
             *o = ((db + RANGE_DB) / RANGE_DB * HEIGHT as f32).clamp(0.0, HEIGHT as f32);
         }
         out

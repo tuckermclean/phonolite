@@ -957,8 +957,9 @@ impl App {
         let samples = if self.cfg.vis == Mode::Scope { self.player.samples(576) } else { None };
         let current = self.heard_index().or(self.playlist.current());
         let full = std::mem::take(&mut self.full_redraw);
-        let eq_key = format!("{:?}{}{}", self.cfg.eq, self.cfg.eq_auto, view.focused);
-        let mini = if view.status == Status::Stopped { String::new() } else { format!("{}{}", view.position.floor(), view.remaining) };
+        let e = &self.cfg.eq;
+        let eq_key = format!("{}{}{:?}{}{}", e.on, e.preamp.to_bits(), e.bands.map(f64::to_bits), self.cfg.eq_auto, view.focused);
+        let mini = if view.status == Status::Stopped { String::new() } else { format!("{}{}", view.position as u64, view.remaining) };
         let pl_key = format!("{}|{current:?}|{mini}|{:?}|{}", self.rows_version, view.status, view.focused);
         let redraw_eq = self.cfg.show_eq && (full || self.dirty[1] || self.keys[1] != eq_key);
         let redraw_pl = self.cfg.show_pl && (full || self.dirty[2] || self.keys[2] != pl_key);

@@ -34,3 +34,25 @@ jobs:
           RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
           cargo test
           for i in $(seq 1 10); do cargo test -q -- --test-threads=16 || exit 1; done
+
+  # The build that matters: a Pentium, stretching to a 486DX2. Built the way
+  # Stele is built, in the same pinned image (the i486 musl cross toolchain
+  # lives only there), and held to a size budget.
+  i486:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/tuckermclean/monolith-builder@sha256:c8978fe3b56cf6ec1714b1b878997c7082cbf9786caa2b8cbcdbd986169c0daf
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: phonolite
+      - uses: actions/checkout@v4
+        with:
+          repository: tuckermclean/protolith
+          path: protolith
+      - working-directory: phonolite
+        run: INSIDE_BUILDER=1 STRIP=true sh tools/build-i486.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phonolite-i486
+          path: phonolite/target-i486/i486-monolith-linux-musl/release/phonolite
