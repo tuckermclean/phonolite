@@ -107,9 +107,19 @@ and libc's DNS resolver (via protolith).
 The built-in decoder (its own crate, built at `opt-level = 3` while the
 rest is built for size) decodes 320 kbit/s stereo at 406× real time on one
 modern core — the same as mpg123's portable C path (mpg123 with AVX: 2×
-faster). On a 486
-mpg123's hand-tuned x86 code will be faster still; the built-in decoder is
-for when mpg123 is not there. Its speed on a real 486 is unmeasured.
+faster). On period hardware, emulated cycle by cycle in 86Box
+(`tools/bench-86box.sh`), as a multiple of real time:
+
+| CPU | MP3 128 kbit/s joint stereo | MP3 320 kbit/s | MP3 64 kbit/s mono | MP3 22 kHz (MPEG-2) | MP2 192 kbit/s |
+|---|---|---|---|---|---|
+| 486DX2-66 | 0.55× | 0.53× | 0.68× | 1.11× | 0.66× |
+| Am486DX4-100 | 0.84× | 0.80× | 1.03× | 1.68× | 0.99× |
+| Am5x86-133 | 1.12× | 1.07× | 1.38× | 2.24× | 1.33× |
+| Pentium OverDrive 83 | 2.10× | 1.94× | 2.41× | 4.24× | 2.16× |
+
+So the built-in decoder plays 44.1 kHz MP3 from an Am5x86-133 up (with
+little to spare) and comfortably on a Pentium; a 486DX2-66 keeps up only
+with 22 kHz files. Under 1× the music stutters.
 
 CPU, measured on x86_64 with the visualizer on over 20 s of playback (as a
 share of one modern core; the test audio is MPEG Layer I, cheaper to decode
@@ -158,6 +168,9 @@ arrows, Enter and Delete act on it.
   docked beyond it no longer follow the player until snapped back.
 - The playlist is drawn in Terminus, not the font `pledit.txt` names.
 - No mini-browser, video window, `gen.bmp` windows or skin cursors.
+- A 486DX2 or DX4 cannot decode 44.1 kHz MP3 in real time with the
+  built-in decoder (see Cost); half-rate decoding, as mpg123's `-2` does,
+  is the likely remedy and is not done yet.
 - Displayed time and the visualizer follow what has been sent to the sink,
   not the sound card's own latency.
 - The built-in decoder does not trim the encoder's delay and padding (LAME

@@ -15,5 +15,5 @@ fn main() {
         seconds += pcm.len() as f64 / info.channels.max(1) as f64 / f64::from(info.hz.max(1));
     }
     let took = start.elapsed().as_secs_f64();
-    println!("{seconds:.1} s of {hz} Hz audio in {took:.3} s: {:.0}x real time", seconds / took);
+    println!("{seconds:.1} s of {hz} Hz audio in {took:.3} s: {:.2}x real time", seconds / took);
 }

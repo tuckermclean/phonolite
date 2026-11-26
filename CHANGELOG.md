@@ -34,6 +34,12 @@ First version: a classic-skinned mpg123 frontend on protolith.
   the server. Measured: 1.65 % of a core at 30 fps, 0.95 % at
   `--rate 22050 --fps 10`.
 - Settings and playlist kept in `$XDG_CONFIG_HOME/phonolite`.
+- **Measured on period hardware**: `tools/bench-86box.sh` boots The
+  Monolith's i486 kernel in 86Box with the decoder bench and fixtures in
+  its initramfs, and reads the results off the disk image. 128 kbit/s
+  MP3: 0.55× real time on a 486DX2-66, 0.84× on an Am486DX4-100, 1.12× on
+  an Am5x86-133, 2.10× on a Pentium OverDrive 83; 22 kHz MP3 1.11× on the
+  DX2. The bench prints two decimals.
 - **Detachable windows that snap**: the player, equalizer and playlist
   are three windows (the latter two transient for the player). Drag the
   equalizer or playlist by its title bar to pull it off; an edge within

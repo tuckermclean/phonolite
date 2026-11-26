@@ -70,6 +70,12 @@ real time, and races show only under load. Needs `mpg123` (which brings
    the window read back must equal the last frame, and the last frame must
    equal a from-scratch render (catches stale caching).
 
+6. Period hardware, by hand when the question comes up (not CI):
+   `tools/bench-86box.sh [CPU|all]` boots The Monolith's i486 kernel in
+   86Box (an ASUS 486SP3G, Award BIOS, its CMOS in `tools/86box/`) and
+   times the decoder there, in the guest's own clock. Needs
+   `MONOLITH_ISO`, podman, Xvfb; about two minutes per CPU.
+
 ## Hard-won lessons
 
 - mpg123 replies on stderr (`--remote-err`) so stdout can carry audio; it
@@ -94,6 +100,15 @@ real time, and races show only under load. Needs `mpg123` (which brings
   long before it handles clicks), read positions with `xwininfo`
   (`xdotool getwindowgeometry` counts a reparenting WM's title twice),
   and kill what each run started (`timeout` alone leaves Xvfb behind).
+- 86Box: a fresh CMOS stops POST ("press F1"); the board's disk type
+  must be in CMOS (made once in SETUP, kept as an `.nvr` file), so the
+  disk image keeps its geometry. Its process is named `qt_thread`, not
+  86Box; it ignores SIGTERM; it writes disk images through, so the host
+  can poll the results partition while it runs. The Monolith rc1
+  initramfs's busybox has no `dd` or `sed`.
+- The Monolith rc1 kernel unpacks at 16 MB (`CONFIG_PHYSICAL_START`):
+  it needs about 26 MB of RAM to boot; the 1993 AMI board (ali1429) never
+  started it at all. Bench boards need 32 MB.
 - `read_pixels` reads protolith's backing pixmap, so it works on unmapped
   windows; ask the server (`GetWindowAttributes`) whether one is shown.
 - PulseAudio: protocol details come from its `native-common.h`,
