@@ -151,8 +151,8 @@ impl Spectrum {
     /// fall 1.5 px a frame; peaks hold 12 frames, then fall.
     pub fn update(&mut self, samples: Option<&[i16]>) {
         let levels = samples.map_or([0.0; BARS], |s| self.levels(s));
-        for k in 0..BARS {
-            self.bars[k] = levels[k].max(self.bars[k] - 1.5);
+        for (k, &level) in levels.iter().enumerate() {
+            self.bars[k] = level.max(self.bars[k] - 1.5);
             if self.bars[k] >= self.peaks[k] {
                 self.peaks[k] = self.bars[k];
                 self.hold[k] = 12;

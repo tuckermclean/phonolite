@@ -418,7 +418,7 @@ mod tests {
     /// what the client sends, grants credit in small requests, and
     /// collects the audio.
     fn fake_server(path: PathBuf, grant: u32, reject_auth: bool) -> std::thread::JoinHandle<(Vec<Vec<u8>>, Vec<u8>)> {
-        let listener = UnixListener::bind(&path).unwrap();
+        let listener = UnixListener::bind(path).unwrap();
         std::thread::spawn(move || {
             let (mut s, _) = listener.accept().unwrap();
             let mut commands = Vec::new();

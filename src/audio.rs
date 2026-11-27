@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn flush_drops_the_rest() {
         let a = Audio::new(RATE, Box::new(|| {}));
-        a.set_sink(Box::new(Rec::default()));
+        a.set_sink(Box::<Rec>::default());
         a.queue(1, Box::new(Cursor::new(ramp(0, RATE as u64))));
         a.queue(2, Box::new(Cursor::new(ramp(0, 100))));
         thread::sleep(Duration::from_millis(100));
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn the_visualizer_window_ends_at_the_play_position() {
         let a = Audio::new(RATE, Box::new(|| {}));
-        a.set_sink(Box::new(Rec::default()));
+        a.set_sink(Box::<Rec>::default());
         // Both channels carry the ramp, so the mono mix is the ramp.
         let both: Vec<u8> = (0..RATE as u64).flat_map(|i| [(i as i16).to_le_bytes(), (i as i16).to_le_bytes()].concat()).collect();
         a.queue(1, Box::new(Cursor::new(both)));

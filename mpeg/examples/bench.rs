@@ -6,7 +6,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let path = args.next().expect("a file");
     let reps: usize = args.next().map_or(100, |n| n.parse().expect("a count"));
-    let data = std::fs::read(&path).expect("readable");
+    let data = std::fs::read(path).expect("readable");
     let start = std::time::Instant::now();
     let (mut seconds, mut hz) = (0.0, 0);
     for _ in 0..reps {

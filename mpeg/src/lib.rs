@@ -1172,7 +1172,7 @@ fn mp3d_find_frame(mp3: &[u8], free_format_bytes: &mut usize) -> (usize, usize) 
                 if hdr_compare(h, &h[k..]) {
                     let fb = k - hdr_padding(h);
                     let nextfb = fb + hdr_padding(&h[k..]);
-                    if !(i + k + nextfb + HDR_SIZE > n || !hdr_compare(h, &h[k + nextfb..])) {
+                    if i + k + nextfb + HDR_SIZE <= n && hdr_compare(h, &h[k + nextfb..]) {
                         frame_and_padding = k;
                         frame_bytes = fb;
                         *free_format_bytes = fb;

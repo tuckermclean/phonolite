@@ -232,8 +232,8 @@ struct Resampler {
 impl Resampler {
     fn push(&mut self, cur: [f32; 2], out: &mut Vec<u8>) {
         while self.t < 1.0 {
-            for ch in 0..2 {
-                let v = self.prev[ch] + (cur[ch] - self.prev[ch]) * self.t as f32;
+            for (&p, &c) in self.prev.iter().zip(&cur) {
+                let v = p + (c - p) * self.t as f32;
                 out.extend((v.round().clamp(-32768.0, 32767.0) as i16).to_le_bytes());
             }
             self.t += self.step;
