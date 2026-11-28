@@ -1,0 +1,14 @@
+# The role guard's test paths: its defaults, plus the decoder's test modules and the fixture generators.
+# Inline `#[cfg(test)] mod tests` blocks in src/ are not test paths: a tester adds tests in tests/*.rs
+# or mpeg/src/tests.rs instead, and an implementer never weakens an inline one.
+tests:
+  - "**/*.test.sh"
+  - "**/*_test.*"
+  - "**/test_*"
+  - "**/tests/**"
+  - "**/testdata/**"
+  - "**/fixtures/**"
+  - "mpeg/src/tests.rs"
+  - "mpeg/src/testsignal.rs"
+  - "tools/fixtures.py"
+  - "tools/mpeg-*"
